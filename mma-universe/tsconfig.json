@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@mma/sim": ["packages/sim/src/index.ts"],
+      "@mma/sim/*": ["packages/sim/src/*"],
+      "@mma/data": ["packages/data/src/index.ts"],
+      "@mma/data/*": ["packages/data/src/*"]
+    }
+  },
+  "include": ["packages/*/src/**/*", "packages/*/test/**/*", "apps/*/src/**/*", "apps/*/test/**/*"],
+  "exclude": ["**/node_modules", "**/dist"]
+}

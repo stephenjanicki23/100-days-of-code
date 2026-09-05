@@ -1,0 +1,31 @@
+{
+  "name": "mma-universe",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "A deep, persistent, deterministic MMA universe simulation.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "generate": "npm run -w @mma/cli generate",
+    "advance": "npm run -w @mma/cli advance",
+    "show": "npm run -w @mma/cli show",
+    "api": "npm run -w @mma/api dev",
+    "web": "npm run -w @mma/web dev"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

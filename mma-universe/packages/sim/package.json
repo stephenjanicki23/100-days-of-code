@@ -1,0 +1,13 @@
+{
+  "name": "@mma/sim",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure, deterministic MMA simulation core. No I/O, no dependencies.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  }
+}

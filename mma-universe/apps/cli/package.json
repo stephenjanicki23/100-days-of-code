@@ -1,0 +1,18 @@
+{
+  "name": "@mma/cli",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Command-line control of an MMA universe: generate, advance, inspect.",
+  "bin": { "mma": "./src/index.ts" },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "generate": "tsx src/index.ts generate",
+    "advance": "tsx src/index.ts advance",
+    "show": "tsx src/index.ts show"
+  },
+  "dependencies": {
+    "@mma/data": "*",
+    "@mma/sim": "*"
+  }
+}

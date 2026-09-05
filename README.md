@@ -1,6 +1,7 @@
 # I've joined the #100DaysOfCode Challenge.
 
 ## Contents
+* [MMA Universe](mma-universe/) — a deterministic MMA world simulation built during the challenge
 * [Rules](rules.md)
 * [Log - click here to see my progress](log.md)
 * [FAQ](FAQ.md)
