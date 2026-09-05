@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   Rng,
+  applyFightResult,
   currentAbility,
   fighterStyle,
   generateUniverse,
@@ -242,5 +243,81 @@ describe('the engine leaves the world it was given untouched', () => {
     const before = JSON.stringify([a, b]);
     fight(a, b, 'purity');
     expect(JSON.stringify([a, b])).toBe(before);
+  });
+});
+
+describe('Sprint 12 — a result changes the world', () => {
+  it('gives the belt to whoever wins the title fight', () => {
+    // A championship is a fact, not a computed position: the winner of a title fight is the
+    // champion even if the fighter they beat still scores higher on every ranking criterion.
+    const world = generateUniverse({ seed: 'title-change', fighterCount: 200, campCount: 20 });
+    const promotion = world.state.promotions[0]!;
+    const divisionKey = 'm_lightweight';
+    const ranked = world.rankingsFor(promotion.id, divisionKey);
+    const champion = world.requireFighter(ranked[0]!.fighterId);
+    const challenger = world.requireFighter(ranked[1]!.fighterId);
+
+    const fight = {
+      id: 'fight_title', divisionKey, fighterAId: champion.id, fighterBId: challenger.id,
+      boutOrder: 1, billing: 'main_event' as const, isTitleFight: true,
+      scheduledRounds: 5, status: 'scheduled' as const,
+    };
+    // Force the challenger to win, so the assertion is about the consequence, not the fight.
+    const result = { ...simulateFight(champion, challenger, { fightId: fight.id, rounds: 5 }, Rng.fromSeed('t')), outcome: 'KO' as const, winnerId: challenger.id, loserId: champion.id };
+
+    applyFightResult(world, fight, result, { date: world.date });
+
+    const newChampion = world.rankingsFor(promotion.id, divisionKey).find((entry) => entry.rank === 0);
+    expect(newChampion?.fighterId).toBe(challenger.id);
+    expect(challenger.career.titleReigns).toBe(1);
+  });
+
+  it('records a successful defence as a defence, not a new reign', () => {
+    const world = generateUniverse({ seed: 'title-defence', fighterCount: 200, campCount: 20 });
+    const promotion = world.state.promotions[0]!;
+    const divisionKey = 'm_welterweight';
+    const ranked = world.rankingsFor(promotion.id, divisionKey);
+    const champion = world.requireFighter(ranked[0]!.fighterId);
+    const challenger = world.requireFighter(ranked[1]!.fighterId);
+    const reignsBefore = champion.career.titleReigns;
+
+    const fight = {
+      id: 'fight_defence', divisionKey, fighterAId: champion.id, fighterBId: challenger.id,
+      boutOrder: 1, billing: 'main_event' as const, isTitleFight: true,
+      scheduledRounds: 5, status: 'scheduled' as const,
+    };
+    const result = { ...simulateFight(champion, challenger, { fightId: fight.id, rounds: 5 }, Rng.fromSeed('d')), outcome: 'UNANIMOUS_DECISION' as const, winnerId: champion.id, loserId: challenger.id };
+
+    applyFightResult(world, fight, result, { date: world.date });
+
+    expect(champion.career.titleReigns).toBe(reignsBefore);
+    expect(champion.career.titleDefenses).toBeGreaterThan(0);
+    expect(world.state.events.some((e) => e.type === 'TITLE_DEFENDED')).toBe(true);
+    expect(world.rankingsFor(promotion.id, divisionKey)[0]!.fighterId).toBe(champion.id);
+  });
+
+  it('updates records, streaks and memory on both fighters', () => {
+    const world = generateUniverse({ seed: 'apply', fighterCount: 120, campCount: 12 });
+    const a = world.state.fighters[5]!;
+    const b = world.state.fighters[6]!;
+    const winsBefore = a.record.wins;
+    const lossesBefore = b.record.losses;
+
+    const fight = {
+      id: 'fight_apply', divisionKey: a.divisionKey, fighterAId: a.id, fighterBId: b.id,
+      boutOrder: 1, billing: 'prelim' as const, isTitleFight: false,
+      scheduledRounds: 3, status: 'scheduled' as const,
+    };
+    const result = { ...simulateFight(a, b, { fightId: fight.id, rounds: 3 }, Rng.fromSeed('a')), outcome: 'SUBMISSION' as const, winnerId: a.id, loserId: b.id, technique: 'ARMBAR' };
+    applyFightResult(world, fight, result, { date: world.date });
+
+    expect(a.record.wins).toBe(winsBefore + 1);
+    expect(a.record.submissionWins).toBeGreaterThan(0);
+    expect(b.record.losses).toBe(lossesBefore + 1);
+    expect(b.record.winStreak).toBe(0);
+    // Fighter memory (brief §22) — what each carries into a rematch.
+    expect(a.memories.find((m) => m.opponentId === b.id)?.psychologicalEdge).toBeGreaterThan(0);
+    expect(b.memories.find((m) => m.opponentId === a.id)?.psychologicalEdge).toBeLessThan(0);
+    expect(a.career.lastFightDate).toBe(world.date);
   });
 });

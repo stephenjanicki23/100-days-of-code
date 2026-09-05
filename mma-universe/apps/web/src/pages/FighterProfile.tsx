@@ -3,7 +3,7 @@
 import { useApi } from '../api.ts';
 import { AbilityMeter, Bar, ErrorNote, Loading, Panel } from '../components.tsx';
 import { navigate } from '../router.ts';
-import type { FighterProfile as Profile } from '../types.ts';
+import type { FightSummary, FighterProfile as Profile } from '../types.ts';
 
 const GROUP_LABELS: Record<string, string> = {
   striking: 'Striking',
@@ -45,6 +45,7 @@ function DevelopmentChart({ history }: { history: Profile['development'] }) {
 
 export function FighterProfile({ id }: { id: string }) {
   const { data, loading, error } = useApi<Profile>(`/fighters/${id}`);
+  const fights = useApi<FightSummary[]>(`/fighters/${id}/fights`);
   if (loading) return <Loading what="fighter" />;
   if (error) return <ErrorNote message={error} />;
   if (!data) return null;
@@ -164,6 +165,54 @@ export function FighterProfile({ id }: { id: string }) {
           <DevelopmentChart history={data.development} />
         </Panel>
       </div>
+
+      {(fights.data?.length ?? 0) > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <Panel title="Fight history">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Opponent</th>
+                  <th>Result</th>
+                  <th>Method</th>
+                  <th className="num">Round</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(fights.data ?? []).map((fight) => {
+                  const opponentName = fight.fighterAId === data.id ? fight.fighterBName : fight.fighterAName;
+                  const won = fight.winnerName === data.name || fight.winnerName === `${data.firstName} ${data.lastName}`;
+                  const drawn = !fight.winnerName;
+                  return (
+                    <tr key={fight.id}>
+                      <td className="muted">{fight.fightDate}</td>
+                      <td>{opponentName}</td>
+                      <td>
+                        <span className={drawn ? 'muted' : won ? 'move-up' : 'move-down'}>
+                          {drawn ? 'Draw' : won ? 'Win' : 'Loss'}
+                        </span>
+                        {fight.isTitleFight && <span className="badge elite" style={{ marginLeft: 8 }}>Title</span>}
+                      </td>
+                      <td className="muted">
+                        {(fight.outcome ?? '').replace(/_/g, ' ').toLowerCase()}
+                        {fight.technique ? ` (${fight.technique.replace(/_/g, ' ').toLowerCase()})` : ''}
+                      </td>
+                      <td className="num muted">{fight.finishRound ?? '—'}</td>
+                      <td>
+                        <span className="link" onClick={() => navigate(`fight-center/${fight.id}`)}>
+                          play-by-play
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Panel>
+        </div>
+      )}
 
       <div className="grid cols-2">
         {groups.map((group) => (

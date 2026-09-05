@@ -75,7 +75,7 @@ function Screen({ segments }: { segments: readonly string[] }) {
     case 'camps':
       return second ? <CampDetail id={second} /> : <Camps />;
     case 'fight-center':
-      return <FightCenter />;
+      return <FightCenter id={second} />;
     default:
       return (
         <div className="center">

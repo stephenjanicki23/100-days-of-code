@@ -3,13 +3,14 @@
 import { useApi } from '../api.ts';
 import { Loading, ErrorNote, Panel, Stat, FighterLink, TierBadge } from '../components.tsx';
 import { navigate } from '../router.ts';
-import type { Champion, PromotionInfo, SimulationState, WorldEvent } from '../types.ts';
+import type { Champion, FightSummary, PromotionInfo, SimulationState, WorldEvent } from '../types.ts';
 
 export function Dashboard() {
   const state = useApi<SimulationState>('/simulation/state');
   const champions = useApi<Champion[]>('/champions');
   const events = useApi<WorldEvent[]>('/events?limit=18');
   const promotions = useApi<PromotionInfo[]>('/promotions');
+  const fights = useApi<FightSummary[]>('/fights?limit=8');
 
   if (state.error) return <ErrorNote message={state.error} />;
   if (!state.data) return <Loading what="the universe" />;
@@ -37,13 +38,13 @@ export function Dashboard() {
               <tbody>
                 {champions.data.map((champion) => (
                   <tr key={champion.divisionKey}>
-                    <td style={{ width: 170 }}>
+                    <td style={{ width: 150 }}>
                       <span className="link" onClick={() => navigate(`rankings/${champion.divisionKey}`)}>
                         {champion.divisionName}
                       </span>
                     </td>
                     <td>
-                      <FighterLink fighter={champion.fighter} />
+                      <FighterLink fighter={champion.fighter} compact />
                     </td>
                     <td className="record">{champion.fighter.record}</td>
                     <td className="num">
@@ -73,6 +74,46 @@ export function Dashboard() {
           )}
         </Panel>
       </div>
+
+      {(fights.data?.length ?? 0) > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <Panel title="Recent results">
+            <table>
+              <thead>
+                <tr>
+                  <th>Bout</th>
+                  <th>Winner</th>
+                  <th>Method</th>
+                  <th className="num">Round</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(fights.data ?? []).map((fight) => (
+                  <tr key={fight.id}>
+                    <td>
+                      {fight.fighterAName} <span className="muted">vs</span> {fight.fighterBName}
+                    </td>
+                    <td>
+                      <strong>{fight.winnerName ?? 'Draw'}</strong>
+                    </td>
+                    <td className="muted">
+                      {(fight.outcome ?? '').replace(/_/g, ' ').toLowerCase()}
+                      {fight.technique ? ` (${fight.technique.replace(/_/g, ' ').toLowerCase()})` : ''}
+                    </td>
+                    <td className="num muted">{fight.finishRound ?? '—'}</td>
+                    <td>
+                      <span className="link" onClick={() => navigate(`fight-center/${fight.id}`)}>
+                        play-by-play
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Panel>
+        </div>
+      )}
 
       <div style={{ marginTop: 16 }}>
         <Panel title="Promotions">

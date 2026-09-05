@@ -151,3 +151,49 @@ export interface FighterList {
   offset: number;
   items: FighterSummary[];
 }
+
+/** One event of a fight's play-by-play, as published by the API. */
+export interface FightEventWire {
+  schemaVersion: number;
+  fightId: string;
+  sequence: number;
+  round: number;
+  timestamp: number;
+  roundTime: string;
+  timeRemaining: number;
+  position: string;
+  eventType: string;
+  description: string;
+  attacker?: string;
+  defender?: string;
+  fighterId?: string;
+  technique?: string;
+  target?: string;
+  result?: string;
+  damage?: number;
+}
+
+export interface FightSummary {
+  id: string;
+  divisionKey: string;
+  fighterAId: string;
+  fighterBId: string;
+  fighterAName?: string;
+  fighterBName?: string;
+  winnerName?: string;
+  outcome?: string;
+  finishRound?: number;
+  finishTime?: string;
+  technique?: string;
+  isTitleFight: boolean;
+  scheduledRounds: number;
+  fightDate?: string;
+}
+
+export interface FightDetail extends FightSummary {
+  divisionName: string;
+  fighterA?: FighterSummary;
+  fighterB?: FighterSummary;
+  events: FightEventWire[];
+  scorecards: { judgeName: string; rounds: { round: number; a: number; b: number }[]; totalA: number; totalB: number }[];
+}

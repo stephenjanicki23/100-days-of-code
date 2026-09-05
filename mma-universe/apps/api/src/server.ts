@@ -16,23 +16,35 @@ import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import {
   DIVISIONS,
+  STANDARD_ROUNDS,
+  TITLE_FIGHT_ROUNDS,
   advanceUniverse,
+  applyFightResult,
   currentAbility,
+  displayName,
   division,
   fighterStyle,
   generateUniverse,
   mapEventToAnimation,
+  simulateFight,
   FIGHT_EVENT_JSON_SCHEMA,
   animationRegistry,
   requiredClips,
+  type Fight,
   type Fighter,
   type Universe,
 } from '@mma/sim';
 import {
   developmentHistory,
+  fightsForFighter,
+  loadFight,
+  loadFightEvents,
+  loadScorecards,
   loadUniverse,
   openDatabase,
   recentEvents,
+  recentFights,
+  saveFight,
   saveUniverse,
   universeExists,
   type Db,
@@ -253,30 +265,87 @@ app.get<{ Querystring: { limit?: string } }>('/events', async (request) => {
   return recentEvents(service.db, limit);
 });
 
-/* ------------------------------------------------------- fights (Phase 3/4) */
+/* -------------------------------------------------------------------- fights */
 
-app.get<{ Params: { id: string } }>('/fights/:id', async (request, reply) => {
-  const fight = service.db.prepare('SELECT * FROM fight WHERE id = ?').get(request.params.id);
-  if (!fight) return reply.code(404).send({ error: 'fight not found' });
-  return fight;
+app.get<{ Querystring: { limit?: string } }>('/fights', async (request) => {
+  const limit = Math.min(Number(request.query.limit ?? 25), 200);
+  return recentFights(service.db, limit);
 });
 
 /**
- * The stored play-by-play for a fight. `?format=animation` returns the same stream mapped
- * through the 3D abstraction, which is what a renderer consumes — the mapping happens here
- * rather than in the engine so the fight data stays presentation-free.
+ * A fight, with everything the Fight Center needs in one response: the bout, its full
+ * play-by-play, the scorecards and both fighters' summaries.
+ */
+app.get<{ Params: { id: string } }>('/fights/:id', async (request, reply) => {
+  const fight = loadFight(service.db, request.params.id);
+  if (!fight) return reply.code(404).send({ error: 'fight not found' });
+  const a = service.universe.fighter(fight.fighterAId);
+  const b = service.universe.fighter(fight.fighterBId);
+  return {
+    ...fight,
+    divisionName: division(fight.divisionKey).name,
+    fighterA: a ? fighterSummary(service.universe, a) : undefined,
+    fighterB: b ? fighterSummary(service.universe, b) : undefined,
+    events: loadFightEvents(service.db, fight.id),
+    scorecards: loadScorecards(service.db, fight.id),
+  };
+});
+
+/**
+ * The stored play-by-play. `?format=animation` returns the same stream mapped through the 3D
+ * abstraction, which is what a renderer consumes — the mapping happens here rather than in
+ * the engine so the fight data itself stays presentation-free.
  */
 app.get<{ Params: { id: string }; Querystring: { format?: string } }>(
   '/fights/:id/events',
   async (request) => {
-    const rows = service.db
-      .prepare('SELECT payload FROM fight_event WHERE fight_id = ? ORDER BY sequence')
-      .all(request.params.id) as { payload: string }[];
-    const events = rows.map((row) => JSON.parse(row.payload));
+    const events = loadFightEvents(service.db, request.params.id);
     if (request.query.format === 'animation') {
       return events.map((event) => ({ event, directive: mapEventToAnimation(event) }));
     }
     return events;
+  },
+);
+
+app.get<{ Params: { id: string } }>('/fighters/:id/fights', async (request) =>
+  fightsForFighter(service.db, request.params.id),
+);
+
+/** Books and simulates a bout on demand — the "run a fight" button in the Fight Center. */
+app.post<{ Body?: { a?: string; b?: string; rounds?: number; titleFight?: boolean } }>(
+  '/fights/simulate',
+  async (request, reply) => {
+    const { universe } = service;
+    const a = request.body?.a ? universe.fighter(request.body.a) : undefined;
+    const b = request.body?.b ? universe.fighter(request.body.b) : undefined;
+    if (!a || !b) return reply.code(400).send({ error: 'both fighter ids are required' });
+    if (a.id === b.id) return reply.code(400).send({ error: 'a fighter cannot fight themselves' });
+
+    const isTitleFight = request.body?.titleFight === true;
+    const rounds = request.body?.rounds ?? (isTitleFight ? TITLE_FIGHT_ROUNDS : STANDARD_ROUNDS);
+    const fight: Fight = {
+      id: universe.nextId('fight'),
+      divisionKey: a.divisionKey,
+      fighterAId: a.id,
+      fighterBId: b.id,
+      boutOrder: 1,
+      billing: 'main_event',
+      isTitleFight,
+      scheduledRounds: rounds,
+      status: 'scheduled',
+    };
+
+    const result = simulateFight(a, b, { fightId: fight.id, rounds, isTitleFight }, universe.rngFor('fight', fight.id));
+    applyFightResult(universe, fight, result, { date: universe.date });
+    saveFight(service.db, fight, result);
+    saveUniverse(service.db, universe);
+
+    return {
+      fightId: fight.id,
+      outcome: result.outcome,
+      winner: result.winnerId ? displayName(universe.requireFighter(result.winnerId)) : undefined,
+      events: result.events.length,
+    };
   },
 );
 

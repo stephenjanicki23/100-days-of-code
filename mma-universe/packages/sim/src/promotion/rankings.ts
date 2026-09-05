@@ -64,19 +64,34 @@ export function rankingPoints(fighter: Fighter, onDate: SimDate): number {
  * Builds the ranking table for one division from scratch. Used at genesis and as the
  * periodic reconciliation pass; per-fight movement is handled incrementally elsewhere.
  */
+/**
+ * Builds the ranking table for one division.
+ *
+ * `championId` matters more than it looks. A championship is a *fact*, not a computed
+ * position: a challenger who beats the champion is the champion, even if the deposed
+ * titleholder still scores higher on every ranking criterion. Passing the champion in pins
+ * rank 0 and ranks everyone else beneath them. Omitting it — as genesis does, when no title
+ * has ever been contested — falls back to ranking by points alone.
+ */
 export function buildDivisionRankings(
   promotion: Promotion,
   divisionKey: string,
   fighters: readonly Fighter[],
   onDate: SimDate,
   previous: readonly RankingEntry[] = [],
+  championId?: string,
 ): RankingEntry[] {
   const previousRankById = new Map(previous.map((entry) => [entry.fighterId, entry.rank]));
 
-  const eligible = fighters
+  const scored = fighters
     .filter((f) => f.divisionKey === divisionKey && f.promotionId === promotion.id && f.status !== 'retired')
     .map((fighter) => ({ fighter, points: rankingPoints(fighter, onDate) }))
     .sort((a, b) => b.points - a.points || a.fighter.id.localeCompare(b.fighter.id));
+
+  const champion = championId ? scored.find((entry) => entry.fighter.id === championId) : undefined;
+  const eligible = champion
+    ? [champion, ...scored.filter((entry) => entry.fighter.id !== championId)]
+    : scored;
 
   const limit = Math.min(eligible.length, promotion.ranksPerDivision + 1);
   const entries: RankingEntry[] = [];
@@ -109,7 +124,22 @@ export function buildAllRankings(
       const previousForDivision = previous.filter(
         (r) => r.promotionId === promotion.id && r.divisionKey === divisionKey,
       );
-      rankings.push(...buildDivisionRankings(promotion, divisionKey, fighters, onDate, previousForDivision));
+      // A sitting champion keeps the belt through a periodic recompute; they only lose it in
+      // the cage. An active champion who has retired or moved division vacates it.
+      const sitting = previousForDivision.find((entry) => entry.rank === 0)?.fighterId;
+      const stillActive = fighters.some(
+        (f) => f.id === sitting && f.status !== 'retired' && f.divisionKey === divisionKey,
+      );
+      rankings.push(
+        ...buildDivisionRankings(
+          promotion,
+          divisionKey,
+          fighters,
+          onDate,
+          previousForDivision,
+          stillActive ? sitting : undefined,
+        ),
+      );
     }
   }
   return rankings;

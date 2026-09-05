@@ -52,7 +52,8 @@ export function AbilityMeter({ current, potential }: { current: number; potentia
   );
 }
 
-export function FighterLink({ fighter }: { fighter: FighterSummary }) {
+/** `compact` drops the camp, for narrow columns where the full line wraps to three rows. */
+export function FighterLink({ fighter, compact = false }: { fighter: FighterSummary; compact?: boolean }) {
   return (
     <div className="name-cell">
       <span className="link" onClick={() => navigate(`fighters/${fighter.id}`)}>
@@ -60,7 +61,7 @@ export function FighterLink({ fighter }: { fighter: FighterSummary }) {
       </span>
       <span className="sub">
         {fighter.primaryStyle}
-        {fighter.campName ? ` · ${fighter.campName}` : ''}
+        {!compact && fighter.campName ? ` · ${fighter.campName}` : ''}
       </span>
     </div>
   );

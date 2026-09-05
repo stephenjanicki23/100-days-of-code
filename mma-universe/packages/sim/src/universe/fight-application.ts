@@ -15,6 +15,7 @@ import type { Fighter } from '../domain/fighter.ts';
 import type { Fight } from '../domain/fight.ts';
 import type { FightResult } from '../fight/engine.ts';
 import { createInjury, applyChronicCost } from '../development/injury.ts';
+import { buildDivisionRankings } from '../promotion/rankings.ts';
 import type { Universe } from './universe.ts';
 
 export interface ApplyFightOptions {
@@ -40,6 +41,12 @@ export function applyFightResult(
   const a = universe.requireFighter(fight.fighterAId);
   const b = universe.requireFighter(fight.fighterBId);
   const { date } = options;
+
+  // Captured before the result is applied, so a title fight can tell a defence from a change.
+  const promotionId = a.promotionId ?? b.promotionId;
+  const championBefore = promotionId
+    ? universe.rankingsFor(promotionId, fight.divisionKey).find((entry) => entry.rank === 0)?.fighterId
+    : undefined;
 
   fight.status = 'completed';
   fight.fightDate = date;
@@ -113,19 +120,58 @@ export function applyFightResult(
     loser.attributes.confidence = clamp(loser.attributes.confidence - (method === 'ko' ? 2.4 : 1.2), 1, 100);
 
     if (fight.isTitleFight) {
-      winner.career.titleReigns++;
-      universe.record({
-        type: 'TITLE_CHANGE',
-        date,
-        subjectId: winner.id,
-        secondaryId: loser.id,
-        summary: `${winner.firstName} ${winner.lastName} is the new champion, beating ${loser.firstName} ${loser.lastName}.`,
-      });
+      // A champion who wins has defended; a challenger who wins has taken the belt. Reporting
+      // every title-fight win as a new champion is wrong roughly half the time.
+      if (championBefore === winner.id) {
+        winner.career.titleDefenses++;
+        universe.record({
+          type: 'TITLE_DEFENDED',
+          date,
+          subjectId: winner.id,
+          secondaryId: loser.id,
+          summary: `${winner.firstName} ${winner.lastName} retains the title, turning back ${loser.firstName} ${loser.lastName}.`,
+        });
+      } else {
+        winner.career.titleReigns++;
+        winner.career.titleDefenses = 0;
+        universe.record({
+          type: 'TITLE_CHANGE',
+          date,
+          subjectId: winner.id,
+          secondaryId: loser.id,
+          summary: `${winner.firstName} ${winner.lastName} is the new champion, beating ${loser.firstName} ${loser.lastName}.`,
+        });
+      }
     }
   }
 
   rememberOpponent(a, b, result, date);
   rememberOpponent(b, a, result, date);
+
+  // The division reorders immediately. Recomputing one division is cheap — it is the whole
+  // point of keeping rankings per promotion and division rather than as one global table —
+  // and without it the standings contradict the result that just happened.
+  if (promotionId) {
+    const promotion = universe.promotion(promotionId);
+    if (promotion && promotion.ranksPerDivision > 0) {
+      const previous = universe.state.rankings.filter(
+        (entry) => entry.promotionId === promotionId && entry.divisionKey === fight.divisionKey,
+      );
+      // The belt follows the result of a title fight, and is otherwise unaffected.
+      const championAfter = fight.isTitleFight && result.winnerId ? result.winnerId : championBefore;
+      const rebuilt = buildDivisionRankings(
+        promotion,
+        fight.divisionKey,
+        universe.state.fighters,
+        date,
+        previous,
+        championAfter,
+      );
+      universe.state.rankings = universe.state.rankings
+        .filter((entry) => !(entry.promotionId === promotionId && entry.divisionKey === fight.divisionKey))
+        .concat(rebuilt);
+    }
+  }
 
   applyPostFightInjuries(universe, fight, result, date);
 
