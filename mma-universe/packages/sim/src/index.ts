@@ -16,6 +16,7 @@ export * from './domain/fighter.ts';
 export * from './domain/camp.ts';
 export * from './domain/promotion.ts';
 export * from './domain/health.ts';
+export * from './domain/fight.ts';
 
 // Ability
 export * from './ability/facets.ts';
@@ -36,9 +37,17 @@ export * from './development/aging.ts';
 export * from './development/training.ts';
 export * from './development/injury.ts';
 
-// Fight contract (Phase 3 engine consumes and produces these)
+// Fight contract and engine
 export * from './fight/events.ts';
 export * from './fight/validation.ts';
+export * from './fight/plan.ts';
+export * from './fight/techniques.ts';
+export * from './fight/stamina.ts';
+export * from './fight/damage.ts';
+export * from './fight/combatant.ts';
+export * from './fight/tactics.ts';
+export * from './fight/judging.ts';
+export * from './fight/engine.ts';
 
 // 3D visualisation abstraction
 export * from './viz/animation-map.ts';
@@ -46,3 +55,4 @@ export * from './viz/animation-map.ts';
 // Universe
 export * from './universe/universe.ts';
 export * from './universe/advance.ts';
+export * from './universe/fight-application.ts';

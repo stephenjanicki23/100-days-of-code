@@ -10,8 +10,15 @@
  * simulation, persists, and formats. No simulation logic lives here.
  */
 
-import { advanceUniverse, currentAbility, displayName, division, fighterAge, fighterStyle, generateUniverse, recordString, abilityTier, DIVISIONS, primarySpecialisation, discipline } from '@mma/sim';
-import { developmentHistory, loadUniverse, openDatabase, recentEvents, saveUniverse, universeExists } from '@mma/data';
+import {
+  advanceUniverse, currentAbility, displayName, division, fighterAge, fighterStyle, generateUniverse,
+  recordString, abilityTier, DIVISIONS, primarySpecialisation, discipline, simulateFight, applyFightResult,
+  summariseResult, isDecisiveEvent, Rng, STANDARD_ROUNDS, TITLE_FIGHT_ROUNDS, type Fight, type Fighter,
+} from '@mma/sim';
+import {
+  developmentHistory, loadUniverse, openDatabase, recentEvents, saveUniverse, universeExists,
+  saveFight, loadFightEvents, loadScorecards, loadFight, recentFights,
+} from '@mma/data';
 import { mkdirSync } from 'node:fs';
 
 const DEFAULT_DB = 'data/universe.sqlite';
@@ -146,6 +153,100 @@ function commandAdvance(args: Args): void {
   console.log();
 }
 
+/* --------------------------------------------------------------------- fight */
+
+/** Resolves a fighter from an id or a name fragment. */
+function findFighter(universe: ReturnType<typeof loadUniverse>, query: string): Fighter | undefined {
+  const needle = query.toLowerCase();
+  return (
+    universe.fighter(query) ??
+    universe.state.fighters.find((f) => `${f.firstName} ${f.lastName}`.toLowerCase().includes(needle))
+  );
+}
+
+function commandFight(args: Args): void {
+  const path = dbPath(args.flags);
+  const db = openDatabase(path);
+  const universe = loadUniverse(db);
+
+  const divisionKey = typeof args.flags.division === 'string' ? args.flags.division : 'm_lightweight';
+  const promotion = universe.state.promotions[0]!;
+
+  let a: Fighter | undefined;
+  let b: Fighter | undefined;
+  if (typeof args.flags.a === 'string' && typeof args.flags.b === 'string') {
+    a = findFighter(universe, args.flags.a);
+    b = findFighter(universe, args.flags.b);
+  } else {
+    // Default to the most compelling bout available: champion versus top contender.
+    const ranked = universe.rankingsFor(promotion.id, divisionKey);
+    a = ranked[0] ? universe.fighter(ranked[0].fighterId) : undefined;
+    b = ranked[1] ? universe.fighter(ranked[1].fighterId) : undefined;
+  }
+
+  if (!a || !b) {
+    console.error('Could not resolve both fighters. Use --a and --b with ids or names.');
+    db.close();
+    process.exit(1);
+  }
+
+  const isTitleFight = args.flags.title === true;
+  const rounds = flagNumber(args.flags, 'rounds') ?? (isTitleFight ? TITLE_FIGHT_ROUNDS : STANDARD_ROUNDS);
+
+  const fight: Fight = {
+    id: universe.nextId('fight'),
+    divisionKey: a.divisionKey,
+    fighterAId: a.id,
+    fighterBId: b.id,
+    boutOrder: 1,
+    billing: 'main_event',
+    isTitleFight,
+    scheduledRounds: rounds,
+    status: 'scheduled',
+  };
+
+  console.log(`\n${division(fight.divisionKey).name}${isTitleFight ? ' title fight' : ''} · ${rounds} rounds\n`);
+  console.log(`  ${pad(displayName(a), 34)} ${pad(recordString(a), 10)} ${fighterStyle(a).primary.label}`);
+  console.log(`  ${pad(displayName(b), 34)} ${pad(recordString(b), 10)} ${fighterStyle(b).primary.label}\n`);
+
+  const result = simulateFight(a, b, { fightId: fight.id, rounds, isTitleFight }, universe.rngFor('fight', fight.id));
+  applyFightResult(universe, fight, result, { date: universe.date });
+
+  const verbose = args.flags.verbose === true;
+  let round = 0;
+  for (const event of result.events) {
+    if (event.round !== round) {
+      round = event.round;
+    }
+    if (verbose || isDecisiveEvent(event) || ['ROUND_START', 'ROUND_END', 'CORNER_INSTRUCTION', 'DECISION', 'REFEREE_ACTION'].includes(event.eventType)) {
+      const clock = ['ROUND_START', 'ROUND_END'].includes(event.eventType) ? '     ' : event.roundTime;
+      console.log(`  R${event.round} ${clock}  ${event.description}`);
+    }
+  }
+
+  console.log(`\n  ${summariseResult(result, (id) => displayName(universe.requireFighter(id)))}\n`);
+  for (const [id, statistics] of Object.entries(result.stats)) {
+    const fighter = universe.requireFighter(id);
+    console.log(
+      `  ${pad(fighter.lastName, 16)} sig ${pad(`${statistics.significantStrikesLanded}/${statistics.significantStrikesAttempted}`, 8)}` +
+        ` head ${pad(String(statistics.headStrikes), 3)} body ${pad(String(statistics.bodyStrikes), 3)} leg ${pad(String(statistics.legStrikes), 3)}` +
+        ` TD ${pad(`${statistics.takedownsLanded}/${statistics.takedownsAttempted}`, 6)} sub ${pad(String(statistics.submissionAttempts), 3)}` +
+        ` ctrl ${pad(`${statistics.controlTime}s`, 6)} KD ${statistics.knockdowns}`,
+    );
+  }
+  if (result.scorecards.length > 0 && result.outcome.includes('DECISION')) {
+    console.log();
+    for (const card of result.scorecards) {
+      console.log(`  ${pad(card.judgeName, 22)} ${card.totalA}-${card.totalB}   [${card.rounds.map((r) => `${r.a}-${r.b}`).join('  ')}]`);
+    }
+  }
+
+  saveFight(db, fight, result);
+  saveUniverse(db, universe);
+  db.close();
+  console.log(`\n  saved as ${fight.id} — see it with: mma show fight ${fight.id}\n`);
+}
+
 /* ---------------------------------------------------------------------- show */
 
 function showRankings(universe: ReturnType<typeof loadUniverse>, divisionKey: string, promotionShort?: string): void {
@@ -256,6 +357,41 @@ function commandShow(args: Args): void {
       showCamps(universe);
       break;
     }
+    case 'fight': {
+      const fightId = rest[0];
+      const fight = fightId ? loadFight(db, fightId) : recentFights(db, 1)[0];
+      if (!fight) {
+        db.close();
+        console.log('No fights have been simulated yet. Run: mma fight');
+        break;
+      }
+      const fightEvents = loadFightEvents(db, fight.id);
+      const cards = loadScorecards(db, fight.id);
+      db.close();
+      console.log(`\n${fight.fighterAName} vs ${fight.fighterBName} — ${division(fight.divisionKey).name}\n`);
+      for (const event of fightEvents) {
+        if (isDecisiveEvent(event) || ['ROUND_START', 'ROUND_END', 'DECISION', 'CORNER_INSTRUCTION'].includes(event.eventType)) {
+          console.log(`  R${event.round} ${event.roundTime}  ${event.description}`);
+        }
+      }
+      for (const card of cards) console.log(`  ${pad(card.judgeName, 22)} ${card.totalA}-${card.totalB}`);
+      console.log();
+      break;
+    }
+    case 'fights': {
+      const fights = recentFights(db, flagNumber(args.flags, 'limit') ?? 20);
+      db.close();
+      console.log(`\nRecent results (${universe.date})\n`);
+      for (const fight of fights) {
+        console.log(
+          `  ${pad(fight.fightDate ?? '', 11)} ${pad(division(fight.divisionKey).name, 20)} ` +
+            `${pad(`${fight.fighterAName} vs ${fight.fighterBName}`, 44)} ${fight.winnerName ?? 'Draw'} ` +
+            `(${(fight.outcome ?? '').replace(/_/g, ' ').toLowerCase()}${fight.finishRound ? `, R${fight.finishRound}` : ''})`,
+        );
+      }
+      console.log();
+      break;
+    }
     case 'news': {
       const news = recentEvents(db, flagNumber(args.flags, 'limit') ?? 25);
       db.close();
@@ -266,7 +402,7 @@ function commandShow(args: Args): void {
     }
     default:
       db.close();
-      console.log(`Unknown subject "${subject}". Try: rankings, fighter, camps, news.`);
+      console.log(`Unknown subject "${subject}". Try: rankings, fighter, camps, fights, fight, news.`);
   }
 }
 
@@ -282,9 +418,14 @@ MMA Universe
   mma advance [--days N] [--weeks N] [--months N] [--years N] [--db PATH]
       Advances the simulation and persists the result.
 
+  mma fight [--a <id|name>] [--b <id|name>] [--division KEY] [--title] [--rounds N] [--verbose]
+      Simulates a bout, applies the result to both careers, and stores the play-by-play.
+
   mma show rankings [divisionKey] [promotionShortName]
   mma show fighter <id or name>
   mma show camps
+  mma show fights [--limit N]
+  mma show fight <fightId>
   mma show news [--limit N]
 
   Default database: ${DEFAULT_DB}
@@ -300,6 +441,9 @@ function main(): void {
       break;
     case 'advance':
       commandAdvance(args);
+      break;
+    case 'fight':
+      commandFight(args);
       break;
     case 'show':
       commandShow(args);

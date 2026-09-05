@@ -28,7 +28,7 @@ import {
   INTENSITY_INJURY_RISK,
   type TrainingWeekResult,
 } from '../development/training.ts';
-import { healDueInjuries, openInjuries, rollTrainingInjury, SEVERITY_WEAR_COST } from '../development/injury.ts';
+import { applyChronicCost, healDueInjuries, openInjuries, rollTrainingInjury, SEVERITY_WEAR_COST } from '../development/injury.ts';
 import { generateFighter } from '../generation/fighter-generator.ts';
 import { acceptanceFloor } from '../generation/universe-generator.ts';
 import { DIVISIONS } from '../domain/divisions.ts';
@@ -50,6 +50,7 @@ export interface AdvanceReport {
   trainingWeeks: number;
   injuriesOpened: number;
   injuriesHealed: number;
+  chronicInjuries: number;
   retirements: number;
   debuts: number;
   campMoves: number;
@@ -171,14 +172,20 @@ function runWeeklySystems(universe: Universe, date: SimDate, week: number, repor
         0,
         100,
       );
+      // A problem that has become chronic takes a permanent bite out of the attributes the
+      // affected area governs — applied once, here, at the moment it turns chronic.
+      applyChronicCost(fighter, injury);
       fighter.status = 'injured';
       report.injuriesOpened++;
+      if (injury.chronic) report.chronicInjuries++;
       universe.record({
-        type: 'INJURY_SUSTAINED',
+        type: injury.chronic ? 'CHRONIC_INJURY' : 'INJURY_SUSTAINED',
         date,
         subjectId: fighter.id,
-        summary: `${fighter.firstName} ${fighter.lastName} has suffered ${injury.label} in training and is out until ${injury.expectedReturn}.`,
-        payload: { severity: injury.severity, region: injury.region },
+        summary: injury.chronic
+          ? `${fighter.firstName} ${fighter.lastName} has suffered ${injury.label} again — the problem now looks chronic.`
+          : `${fighter.firstName} ${fighter.lastName} has suffered ${injury.label} in training and is out until ${injury.expectedReturn}.`,
+        payload: { severity: injury.severity, region: injury.region, chronic: injury.chronic },
       });
     }
   }
@@ -443,6 +450,7 @@ export function advanceUniverse(universe: Universe, days: number, options: Advan
     trainingWeeks: 0,
     injuriesOpened: 0,
     injuriesHealed: 0,
+    chronicInjuries: 0,
     retirements: 0,
     debuts: 0,
     campMoves: 0,

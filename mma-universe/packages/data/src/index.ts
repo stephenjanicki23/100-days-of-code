@@ -8,3 +8,13 @@ export {
   developmentHistory,
   type SaveOptions,
 } from './repositories/universe-repository.ts';
+export {
+  saveFight,
+  loadFight,
+  loadFightEvents,
+  loadScorecards,
+  recentFights,
+  fightsForFighter,
+  fightCount,
+  type StoredFight,
+} from './repositories/fight-repository.ts';

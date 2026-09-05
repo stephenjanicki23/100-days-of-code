@@ -182,8 +182,12 @@ export interface ImpactEvent extends FightEventBase {
   readonly severity: number;
 }
 
-/** Per-region damage, mirroring the damage model of brief §20. */
-export interface DamageState {
+/**
+ * Per-region damage as carried on the wire. Named separately from the engine's internal
+ * `DamageState` because this is the published shape consumers depend on, and the two must be
+ * free to diverge.
+ */
+export interface DamageSnapshot {
   readonly head: number;
   readonly face: number;
   readonly body: number;
@@ -197,7 +201,7 @@ export interface DamageState {
 export interface DamageUpdateEvent extends FightEventBase {
   readonly eventType: 'DAMAGE_UPDATE';
   readonly fighterId: string;
-  readonly damage: DamageState;
+  readonly damage: DamageSnapshot;
 }
 
 export interface StaminaUpdateEvent extends FightEventBase {
