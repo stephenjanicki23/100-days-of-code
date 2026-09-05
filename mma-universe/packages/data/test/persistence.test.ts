@@ -6,14 +6,17 @@ import {
   type Universe,
 } from '@mma/sim';
 import {
+  MIGRATIONS,
   developmentHistory,
   loadUniverse,
+  migrate,
   openMemoryDatabase,
   recentEvents,
   saveUniverse,
   schemaVersion,
   universeExists,
 } from '@mma/data';
+import Database from 'better-sqlite3';
 
 function smallUniverse(seed = 'persistence') {
   return generateUniverse({ seed, fighterCount: 90, campCount: 10 });
@@ -52,11 +55,68 @@ function fingerprint(universe: Universe): string {
   ].join('#');
 }
 
+describe('migrations', () => {
+  it('upgrades a database created before a later migration existed', () => {
+    // The guarantee migrations exist for: a universe file written by an older build must
+    // still open against a newer one. This is also why a shipped migration is never edited
+    // in place — doing so silently skips the change for every database already out there.
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    db.exec('CREATE TABLE schema_migration (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied TEXT NOT NULL)');
+    db.exec(MIGRATIONS[0]!.sql);
+    db.prepare("INSERT INTO schema_migration VALUES (1, 'initial_schema', datetime('now'))").run();
+
+    const columnsBefore = (db.prepare('PRAGMA table_info(injury)').all() as { name: string }[]).map((c) => c.name);
+    expect(columnsBefore).not.toContain('chronic');
+
+    migrate(db);
+
+    expect(schemaVersion(db)).toBe(MIGRATIONS[MIGRATIONS.length - 1]!.id);
+    const columnsAfter = (db.prepare('PRAGMA table_info(injury)').all() as { name: string }[]).map((c) => c.name);
+    expect(columnsAfter).toContain('chronic');
+
+    // And the upgraded file still works.
+    saveUniverse(db, smallUniverse('upgraded'));
+    expect(loadUniverse(db).state.fighters.length).toBeGreaterThan(0);
+    db.close();
+  });
+
+  it('is idempotent — reopening applies nothing twice', () => {
+    const db = openMemoryDatabase();
+    const version = schemaVersion(db);
+    migrate(db);
+    migrate(db);
+    expect(schemaVersion(db)).toBe(version);
+    db.close();
+  });
+
+  it('has strictly increasing, unique migration ids', () => {
+    const ids = MIGRATIONS.map((migration) => migration.id);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
 describe('persistence', () => {
   it('applies migrations on open', () => {
     const db = openMemoryDatabase();
     expect(schemaVersion(db)).toBeGreaterThan(0);
     expect(universeExists(db)).toBe(false);
+    db.close();
+  });
+
+  it('preserves chronic injuries across a save', () => {
+    const db = openMemoryDatabase();
+    const universe = smallUniverse();
+    const fighter = universe.state.fighters[0]!;
+    fighter.condition.injuries.push({
+      id: 'injury_chronic', fighterId: fighter.id, label: 'a knee injury', region: 'knee',
+      severity: 'serious', startDate: '2026-01-05', expectedReturn: '2026-05-05',
+      cause: 'training', recurrence: 3, chronic: true,
+    });
+    saveUniverse(db, universe);
+    const reloaded = loadUniverse(db).requireFighter(fighter.id);
+    expect(reloaded.condition.injuries.find((i) => i.id === 'injury_chronic')?.chronic).toBe(true);
     db.close();
   });
 

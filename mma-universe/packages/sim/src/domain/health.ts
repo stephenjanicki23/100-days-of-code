@@ -30,7 +30,31 @@ export interface Injury {
   readonly cause: 'training' | 'fight' | 'weight_cut' | 'wear';
   /** A repeat of an existing problem heals slower and recurs more easily. */
   readonly recurrence: number;
+  /**
+   * A problem that never fully goes away (Sprint 6). Chronic injuries permanently depress the
+   * attributes the affected area governs and make future injuries there far more likely — the
+   * mechanism behind a fighter who is "never the same after that knee".
+   */
+  readonly chronic: boolean;
 }
+
+/** Attributes a lasting problem in each region permanently depresses. */
+export const CHRONIC_ATTRIBUTE_COSTS: Record<BodyRegion, readonly string[]> = {
+  head: ['durability', 'composure', 'recovery'],
+  face: ['durability'],
+  body: ['cardio', 'durability'],
+  lead_leg: ['footwork', 'speed', 'agility'],
+  rear_leg: ['explosiveness', 'speed', 'strikingPower'],
+  lead_arm: ['strikingAccuracy', 'strikingDefense'],
+  rear_arm: ['strikingPower', 'submissionAbility'],
+  back: ['strength', 'scrambling', 'agility'],
+  knee: ['agility', 'footwork', 'takedownAbility'],
+  shoulder: ['strength', 'submissionDefense', 'topControl'],
+  hand: ['strikingPower', 'strikingAccuracy'],
+};
+
+/** How many times a region must be hurt before the problem becomes permanent. */
+export const CHRONIC_THRESHOLD = 3;
 
 export function isInjuryOpen(injury: Injury): boolean {
   return injury.endDate === undefined;

@@ -146,7 +146,7 @@ describe('development multipliers', () => {
     const hurt = makeFighter();
     hurt.condition.fatigue = 5;
     hurt.condition.injuries = [
-      { id: 'injury_1', fighterId: hurt.id, label: 'a knee injury', region: 'knee', severity: 'serious', startDate: '2026-01-05', expectedReturn: '2026-04-05', cause: 'training', recurrence: 0 },
+      { id: 'injury_1', fighterId: hurt.id, label: 'a knee injury', region: 'knee', severity: 'serious', startDate: '2026-01-05', expectedReturn: '2026-04-05', cause: 'training', recurrence: 0, chronic: false },
     ];
 
     expect(conditionFactor(fresh)).toBeGreaterThan(conditionFactor(spent));

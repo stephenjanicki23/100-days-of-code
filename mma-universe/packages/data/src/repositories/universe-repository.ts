@@ -219,8 +219,8 @@ export function saveUniverse(db: Db, universe: Universe, options: SaveOptions = 
 
     const insertFighter = db.prepare(upsertSql('fighter', FIGHTER_COLUMNS, 'id'));
     const insertInjury = db.prepare(
-      `INSERT INTO injury (id, fighter_id, label, region, severity, start_date, expected_return, end_date, cause, recurrence)
-       VALUES (@id, @fighterId, @label, @region, @severity, @startDate, @expectedReturn, @endDate, @cause, @recurrence)`,
+      `INSERT INTO injury (id, fighter_id, label, region, severity, start_date, expected_return, end_date, cause, recurrence, chronic)
+       VALUES (@id, @fighterId, @label, @region, @severity, @startDate, @expectedReturn, @endDate, @cause, @recurrence, @chronic)`,
     );
     const insertMemory = db.prepare(
       `INSERT INTO fighter_memory (fighter_id, opponent_id, meetings, wins, losses, last_result, last_method, psychological_edge, last_date)
@@ -231,7 +231,7 @@ export function saveUniverse(db: Db, universe: Universe, options: SaveOptions = 
       insertFighter.run(fighterRow(fighter));
 
       for (const injury of fighter.condition.injuries) {
-        insertInjury.run({ ...injury, endDate: injury.endDate ?? null });
+        insertInjury.run({ ...injury, endDate: injury.endDate ?? null, chronic: injury.chronic ? 1 : 0 });
       }
       for (const memory of fighter.memories) {
         insertMemory.run(
@@ -393,6 +393,7 @@ export function loadUniverse(db: Db): Universe {
       endDate: row.end_date ?? undefined,
       cause: row.cause,
       recurrence: row.recurrence,
+      chronic: row.chronic === 1,
     });
     injuriesByFighter.set(row.fighter_id, list);
   }

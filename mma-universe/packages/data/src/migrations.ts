@@ -371,6 +371,16 @@ CREATE TABLE sponsor (
 );
 `;
 
+/**
+ * Chronic injuries (Sprint 6). Added as a new migration rather than by editing the initial
+ * schema: migration 1 has already shipped, and a universe file created against it must still
+ * open. Editing a released migration silently skips the change for every existing database.
+ */
+const CHRONIC_INJURIES = `
+ALTER TABLE injury ADD COLUMN chronic INTEGER NOT NULL DEFAULT 0;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { id: 1, name: 'initial_schema', sql: INITIAL_SCHEMA },
+  { id: 2, name: 'chronic_injuries', sql: CHRONIC_INJURIES },
 ];

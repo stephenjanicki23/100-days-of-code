@@ -8,11 +8,13 @@
  */
 
 import { Rng } from '../core/rng.ts';
-import { clamp, remap } from '../core/math.ts';
+import { clamp, clampAttribute, remap } from '../core/math.ts';
 import { addDays, type SimDate } from '../core/time.ts';
 import type { Camp } from '../domain/camp.ts';
 import type { Fighter } from '../domain/fighter.ts';
 import {
+  CHRONIC_ATTRIBUTE_COSTS,
+  CHRONIC_THRESHOLD,
   INJURY_SEVERITIES,
   SEVERITY_BASE_DAYS,
   type BodyRegion,
@@ -116,6 +118,9 @@ export function createInjury(rng: Rng, context: InjuryContext, severity: InjuryS
 
   const days = Math.max(2, Math.round(baseDays * recoverySpeed * recurrencePenalty));
 
+  // Enough damage to one area and the problem stops going away (Sprint 6).
+  const chronic = previous + 1 >= CHRONIC_THRESHOLD && severity !== 'knock';
+
   return {
     id: context.idFactory(),
     fighterId: context.fighter.id,
@@ -126,7 +131,22 @@ export function createInjury(rng: Rng, context: InjuryContext, severity: InjuryS
     expectedReturn: addDays(context.date, days),
     cause: context.cause,
     recurrence: previous,
+    chronic,
   };
+}
+
+/**
+ * Applies the permanent cost of a chronic problem. Called once, when the injury is created:
+ * a fighter with a chronic knee is measurably slower for the rest of their career, which is
+ * what stops injuries from being a pause button.
+ */
+export function applyChronicCost(fighter: Fighter, injury: Injury): void {
+  if (!injury.chronic) return;
+  for (const attribute of CHRONIC_ATTRIBUTE_COSTS[injury.region]) {
+    const key = attribute as keyof typeof fighter.attributes;
+    if (fighter.attributes[key] === undefined) continue;
+    fighter.attributes[key] = clampAttribute(fighter.attributes[key] - 1.5);
+  }
 }
 
 /** Rolls for a training injury during one week. Returns undefined for the usual case. */
