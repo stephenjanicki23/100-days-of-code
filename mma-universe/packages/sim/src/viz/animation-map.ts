@@ -192,10 +192,19 @@ function resolveTargetState(event: FightEvent): FightPosition {
  * `reaction-calibration.test.ts` now asserts the spread against a real fight, so the day the
  * engine's damage scale moves, this fails loudly instead of quietly going numb again.
  */
-const LIGHT_DAMAGE = 1.1;
-const HEAVY_DAMAGE = 2.05;
-const FOLD_DAMAGE = 1.55;
-const BUCKLE_DAMAGE = 1.2;
+/*
+ * Recalibrated against the tick-loop engine. These thresholds have now been wrong twice for
+ * the same reason: they are read off a damage distribution that the engine is free to change
+ * underneath them, and nothing errors when they drift — the fighters simply stop reacting.
+ * `reaction-calibration.test.ts` measures the live distribution rather than trusting these,
+ * which is what caught the drift this time.
+ *
+ * Measured over 7,362 landed strikes: p50 0.60, p75 1.00, p90 1.30, p97 1.50, max 2.50.
+ */
+const LIGHT_DAMAGE = 0.45;
+const HEAVY_DAMAGE = 1.5;
+const FOLD_DAMAGE = 1.25;
+const BUCKLE_DAMAGE = 1.0;
 
 /** How the defender reacts, derived from the event's own result and severity. */
 function resolveReaction(event: FightEvent): HitReaction {

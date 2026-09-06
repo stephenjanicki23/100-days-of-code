@@ -51,6 +51,7 @@ export * from './fight/events.ts';
 export * from './fight/validation.ts';
 export * from './fight/plan.ts';
 export * from './fight/techniques.ts';
+export * from './fight/pacing.ts';
 export * from './fight/stamina.ts';
 export * from './fight/damage.ts';
 export * from './fight/combatant.ts';

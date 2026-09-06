@@ -251,7 +251,48 @@ function renderResult(a: Fighter, b: Fighter): void {
     statRow('Knockdowns', (s) => String(s.knockdowns)) +
     statRow('Control time', (s) => clock(s.controlTime));
 
+  renderRoundBreakdown(a, b);
+
   $('result').hidden = false;
+}
+
+/**
+ * The round-by-round breakdown, as a broadcast puts it up between rounds (brief §4).
+ *
+ * Head/body/leg per round per fighter, with the round the judges would have given shaded. The
+ * fight totals alone hide the shape of a fight: a man who lost rounds one and two and then
+ * took over reads identically to one who cruised, until you split it by round.
+ */
+function renderRoundBreakdown(a: Fighter, b: Fighter): void {
+  if (!result) return;
+  const perRound = result.roundStats;
+  const left = perRound[a.id] ?? [];
+  const right = perRound[b.id] ?? [];
+  const rounds = Math.max(left.length, right.length);
+  if (rounds === 0) {
+    $('breakdown').innerHTML = '';
+    return;
+  }
+
+  const cell = (s: (typeof left)[number] | undefined) =>
+    s
+      ? `<b>${s.significantStrikesLanded}</b><span>${s.headStrikes}/${s.bodyStrikes}/${s.legStrikes}</span>`
+      : '<b>—</b><span></span>';
+
+  let html = '<div class="rounds"><div class="rhead"><span></span>';
+  for (let i = 0; i < rounds; i++) html += `<span>R${i + 1}</span>`;
+  html += '</div>';
+  for (const [fighter, series, corner] of [[a, left, 'red'], [b, right, 'blue']] as const) {
+    html += `<div class="rrow ${corner}"><span class="rname">${plain(displayName(fighter))}</span>`;
+    for (let i = 0; i < rounds; i++) {
+      const mine = series[i]?.significantStrikesLanded ?? 0;
+      const theirs = (fighter === a ? right : left)[i]?.significantStrikesLanded ?? 0;
+      html += `<span class="rcell${mine > theirs ? ' won' : ''}">${cell(series[i])}</span>`;
+    }
+    html += '</div>';
+  }
+  html += '</div><p class="rlegend">Significant strikes landed, with head / body / leg beneath. Shaded cell led the round on volume.</p>';
+  $('breakdown').innerHTML = html;
 }
 
 function renderStream(): void {
@@ -297,10 +338,33 @@ function showReplay(): void {
 
 function onFrame(frame: Frame): void {
   $<HTMLInputElement>('scrub').value = String(frame.time);
+  updateLiveCount(frame.time);
   $('time').textContent = `${clock(frame.time)} / ${clock(timeline?.duration ?? 0)}`;
   $('hud-clock').textContent = `R${frame.round} · ${frame.roundTime}`;
   $('hud-line').textContent = frame.description;
   $('hud-cam').textContent = frame.camera.toLowerCase().replace(/_/g, ' ');
+}
+
+/**
+ * The live significant-strike count (brief §4).
+ *
+ * Counted from the event stream up to the playhead rather than from the fight totals, so it
+ * ticks up as the replay runs and matches what has actually been shown.
+ */
+function updateLiveCount(time: number): void {
+  if (!result || !corner[0] || !corner[1]) return;
+  let left = 0;
+  let right = 0;
+  for (const event of result.events) {
+    if (event.timestamp > time) break;
+    if (event.eventType !== 'SIGNIFICANT_STRIKE') continue;
+    const landed = 'result' in event && (event.result === 'LANDED' || event.result === 'PARTIAL');
+    if (!landed || !('attacker' in event)) continue;
+    if (event.attacker === corner[0].id) left++;
+    else right++;
+  }
+  $('count-a').textContent = String(left);
+  $('count-b').textContent = String(right);
 }
 
 /* ----------------------------------------------------------------------- wire */

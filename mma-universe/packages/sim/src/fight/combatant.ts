@@ -19,6 +19,7 @@ import { currentAbility, type Fighter } from '../domain/fighter.ts';
 import { createDamageState, damagePenalties, type DamageState } from './damage.ts';
 import { createStamina, effectiveOutput, type Stamina } from './stamina.ts';
 import { planFromTendencies, type GamePlan } from './plan.ts';
+import type { StrikeTechnique } from './events.ts';
 
 export interface Combatant {
   readonly id: string;
@@ -49,6 +50,40 @@ export interface Combatant {
   knockdowns: number;
   /** True once the fighter is finished. */
   finished: boolean;
+
+  /* ---- tick-loop state (brief §1) ---------------------------------------------------- */
+
+  /** Which weight class this fight is at; the engine reads its pacing profile from it. */
+  readonly divisionKey: string;
+  /**
+   * Fight-elapsed second at which this fighter may act again.
+   *
+   * The engine used to alternate turns on a coin flip, one action at a time, which is why the
+   * fight had no texture: nobody could be caught mid-combination or be a beat late. Each
+   * fighter now runs their own clock and the two are never synchronised.
+   */
+  readyAt: number;
+  /** Fight-elapsed second until which they are still recovering from their own last commitment. */
+  vulnerableUntil: number;
+  /** Strikes left in the combination being thrown. Zero means they are between exchanges. */
+  comboLeft: number;
+  /** The last strike thrown, so the next one can follow from it rather than be redrawn blind. */
+  lastStrike?: StrikeTechnique;
+  /** Positive while backing up or resetting, which is when the flashy techniques open up. */
+  retreatingFor: number;
+  /**
+   * Commentary beats already called, so the play-by-play observes a thing once rather than
+   * every tick it remains true. A log that says "the leg is badly damaged" ninety times is
+   * not commentary.
+   */
+  noted: { legs: boolean; gassed: boolean; body: boolean };
+  /**
+   * Willingness to throw something spectacular, from creativity and showmanship.
+   *
+   * Gates the spinning and flying techniques. Without it every fighter threw them at the same
+   * rate, and they were a fifth of all offence.
+   */
+  readonly flash: number;
 }
 
 export interface RoundStats {
@@ -120,6 +155,29 @@ export function createCombatant(fighter: Fighter, plan?: GamePlan): Combatant {
     stunnedFor: 0,
     knockdowns: 0,
     finished: false,
+    divisionKey: fighter.divisionKey,
+    readyAt: 0,
+    vulnerableUntil: 0,
+    comboLeft: 0,
+    retreatingFor: 0,
+    noted: { legs: false, gassed: false, body: false },
+    // No single "flashiness" rating exists, and inventing one would be worse than deriving it:
+    // the fighters who throw spinning attacks are the ones trained in the arts that teach them
+    // and willing to be caught trying. Taekwondo, karate and sanda supply the technique;
+    // risk tolerance supplies the willingness; explosiveness supplies the legs.
+    flash: clamp(
+      (Math.max(
+        fighter.attributes.taekwondo,
+        fighter.attributes.karate,
+        fighter.attributes.sanda,
+      ) /
+        100) *
+        0.5 +
+        (fighter.personality.riskTolerance / 100) * 0.32 +
+        (fighter.attributes.explosiveness / 100) * 0.18,
+      0,
+      1,
+    ),
   };
 }
 

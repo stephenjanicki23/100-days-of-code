@@ -108,11 +108,14 @@ describe('3D animation mapping (brief §16, §17)', () => {
   });
 
   it('derives the hit reaction from what the event says happened', () => {
-    // Damage values are on the scale the fight engine actually emits — roughly 0.4 to 2.5 for
-    // a landed strike — not the larger numbers these fixtures once assumed.
+    // Damage values are on the scale the fight engine actually emits. The tick-loop rewrite
+    // moved that scale down — a landed strike now runs about 0.2 to 2.5 with a median near
+    // 0.6, where it used to sit higher — so these fixtures moved with it. The live
+    // distribution is what `reaction-calibration.test.ts` measures; this only pins the
+    // mapping's shape.
     expect(mapEventToAnimation({ ...strike, damage: 2.3 }).reaction).toBe('HEAVY');
-    expect(mapEventToAnimation({ ...strike, damage: 1.4 }).reaction).toBe('LIGHT');
-    expect(mapEventToAnimation({ ...strike, damage: 0.6 }).reaction).toBe('NONE');
+    expect(mapEventToAnimation({ ...strike, damage: 0.9 }).reaction).toBe('LIGHT');
+    expect(mapEventToAnimation({ ...strike, damage: 0.3 }).reaction).toBe('NONE');
     expect(mapEventToAnimation({ ...strike, result: 'BLOCKED' }).reaction).toBe('BLOCK');
     expect(mapEventToAnimation({ ...strike, result: 'MISSED' }).reaction).toBe('SLIP');
   });

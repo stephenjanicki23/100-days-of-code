@@ -69,6 +69,8 @@ const CARRY_OVER = 0.16;
 const BLEND_EMERGENCY = 0.07;
 const BLEND_STRIKE = 0.15;
 const BLEND_GRAPPLE = 0.3;
+/** Getting up, or being put down: the legs have a long way to travel. */
+const BLEND_POSITION = 0.5;
 /** Strikes that flow out of the one before rather than starting again from guard. */
 const COMBO_GAP = 0.02;
 const COMBO_WINDOW = 0.9;
@@ -274,7 +276,32 @@ export function buildTimeline(
       facing: 0,
       pinned: -1,
       cameraSide: 1,
-      blend: follows ? BLEND_EMERGENCY : blendFor(directive.clip, directive.reaction, event.eventType),
+      /*
+       * A blend can never be shorter than the beat it has to cross.
+       *
+       * The engine now emits several times as many events, so beats arrive far closer
+       * together, and a 0.07s emergency blend on a beat shorter than that leaves the pose
+       * jumping in a single frame — measured at 1.93 radians, which is a limb teleporting.
+       * The blend is capped at two thirds of the beat so a short beat gets a short blend
+       * rather than no blend.
+       */
+      /*
+       * A blend can never be shorter than the beat it has to cross, and a change of position
+       * needs longer than a change of technique.
+       *
+       * Coming up off the mat moves a foot through two and a half radians; a strike blend of
+       * 0.15s cannot carry that, and the leg teleports. It was rare enough to survive before
+       * because the engine hardly ever went from a ground beat straight to a standing one.
+       * Now that footwork is a first-class action it happens constantly, which is how the
+       * measurement caught it.
+       */
+      blend: Math.min(
+        Math.max(
+          follows ? BLEND_EMERGENCY : blendFor(directive.clip, directive.reaction, event.eventType),
+          last && last.position !== position ? BLEND_POSITION : 0,
+        ),
+        duration * 0.66,
+      ),
       claim: isTotal(directive.clip) ? FULL_MASK : claimOf(clip),
       follows,
     });
@@ -442,6 +469,14 @@ function posesForBeat(timeline: Timeline, beat: TimelineBeat, time: number): Bea
   const u = (time - beat.start) / duration;
   const shared = beat.actorId === undefined;
 
+  /*
+   * The base pose has to cross the beat boundary too.
+   *
+   * Only the *clip* was ever blended. The rest pose underneath it switched instantly the
+   * moment a beat's position changed, so coming up off the mat moved a foot through two and
+   * a half radians in a single frame with nothing carrying it. The clip blend could not fix
+   * it because the discontinuity was never in the clip.
+   */
   const actorBase = resolvePose(restPose(beat.position, 'ACTOR'));
   // Sampled as a chain rather than all at once: hips first, the hand last.
   const actorAction = sampleClipChained(beat.clip, u, duration, REGION_LAG, JOINT_REGION);

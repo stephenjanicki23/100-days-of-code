@@ -273,6 +273,30 @@
     color: var(--ink-dim); border: 1px solid var(--rule); border-radius: 2px; padding: 2px 6px; white-space: nowrap; flex: none;
   }
   #hud-line { font-size: 14px; color: #f2f5fa; }
+  .tally {
+    font-family: var(--mono); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+    padding: 1px 6px; border-radius: 2px; background: #0000008f; border: 1px solid var(--rule);
+  }
+
+  /* ------------------------------------------------------- round-by-round overlay */
+
+  .rounds { display: flex; flex-direction: column; gap: 3px; margin-top: 18px; }
+  .rhead, .rrow { display: grid; grid-template-columns: minmax(120px, 1.4fr) repeat(auto-fit, minmax(52px, 1fr)); gap: 3px; align-items: center; }
+  .rhead span {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-faint); text-align: center;
+  }
+  .rname { font-size: 13px; font-weight: 600; }
+  .rrow.red .rname { color: var(--red); }
+  .rrow.blue .rname { color: var(--blue); }
+  .rcell {
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+    padding: 6px 4px; background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 3px;
+  }
+  .rcell.won { background: var(--raised); border-color: var(--gold-dim); }
+  .rcell b { font-family: var(--mono); font-size: 15px; font-variant-numeric: tabular-nums; }
+  .rcell span { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+  .rlegend { margin: 8px 0 0; font-size: 12px; color: var(--ink-faint); }
 
   .transport {
     display: flex; align-items: center; gap: 11px; flex-wrap: wrap;
@@ -373,15 +397,16 @@
       <div id="stats"></div>
       <div><p class="panel-title">Scorecards</p><div id="cards"></div></div>
     </div>
+    <div id="breakdown"></div>
   </section>
 
   <section id="replay" hidden>
     <p class="panel-title">Replay</p>
     <div class="stage" id="stage">
       <div class="hud hud-top">
-        <span class="hud-name"><i class="dot red"></i><span id="hud-a"></span></span>
+        <span class="hud-name"><i class="dot red"></i><span id="hud-a"></span><b class="tally" id="count-a">0</b></span>
         <span id="hud-clock"></span>
-        <span class="hud-name right"><span id="hud-b"></span><i class="dot blue"></i></span>
+        <span class="hud-name right"><b class="tally" id="count-b">0</b><span id="hud-b"></span><i class="dot blue"></i></span>
       </div>
       <div class="hud hud-bottom">
         <span id="hud-cam"></span>

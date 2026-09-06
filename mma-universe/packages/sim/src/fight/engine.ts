@@ -19,6 +19,7 @@ import { effective, createCombatant, beginRound, currentRound, reachAdvantage, r
 import { applyStrikeDamage, damageDescription, needsDoctor, recoverDamageBetweenRounds, totalDamage } from './damage.ts';
 import { effectiveOutput, recover, recoverBetweenRounds, spend } from './stamina.ts';
 import { adaptInFight, buildGamePlan, cornerInstructions } from './tactics.ts';
+import { classProfile, type ClassProfile } from './pacing.ts';
 import {
   CLINCH_STRIKES,
   GROUND_STRIKES,
@@ -26,6 +27,7 @@ import {
   TAKEDOWNS,
   groundPosition,
   isGroundPosition,
+  openStrikes,
   standingStrikes,
   type Range,
   type StrikeDefinition,
@@ -78,8 +80,33 @@ export interface FightResult {
   readonly events: FightEvent[];
   readonly scorecards: JudgeScorecard[];
   readonly stats: Record<string, FightStats>;
+  /** Per-round statistics per fighter, indexed from round one, for a round-by-round overlay. */
+  readonly roundStats: Record<string, FightStats[]>;
   /** Damage carried out of the fight, used to seed post-fight injuries. */
   readonly damage: Record<string, number>;
+}
+
+/** Copies a round's tally into the shape the result reports. */
+function snapshot(round: {
+  significantStrikesLanded: number; significantStrikesAttempted: number; totalStrikesLanded: number;
+  totalStrikesAttempted: number; headStrikes: number; bodyStrikes: number; legStrikes: number;
+  takedownsLanded: number; takedownsAttempted: number; submissionAttempts: number;
+  knockdowns: number; controlTime: number; damageDealt: number;
+}): FightStats {
+  return {
+    significantStrikesLanded: round.significantStrikesLanded,
+    significantStrikesAttempted: round.significantStrikesAttempted,
+    totalStrikesLanded: round.totalStrikesLanded,
+    headStrikes: round.headStrikes,
+    bodyStrikes: round.bodyStrikes,
+    legStrikes: round.legStrikes,
+    takedownsLanded: round.takedownsLanded,
+    takedownsAttempted: round.takedownsAttempted,
+    submissionAttempts: round.submissionAttempts,
+    knockdowns: round.knockdowns,
+    controlTime: roundTo(round.controlTime, 0),
+    damageTaken: 0,
+  };
 }
 
 /* ------------------------------------------------------------------ internals */
@@ -97,7 +124,19 @@ interface FightState {
   finished: boolean;
   /** Seconds of ground time without meaningful action; drives the referee stand-up. */
   groundStall: number;
+  /**
+   * How far apart the two of them are standing.
+   *
+   * Previously re-rolled from nothing on every exchange, so a fighter could be at kicking
+   * range and then in the pocket a second later with nothing in between. It is now a real
+   * piece of state that footwork moves, which is what lets a jab set up a cross and a
+   * retreating opponent open up the spinning attacks.
+   */
+  distance: Range;
 }
+
+/** State updates run on a fixed tick; actions resolve on each fighter's own clock (brief §1). */
+const TICK = 0.1;
 
 /** "a jab" but "an uppercut" — technique names are interpolated into commentary. */
 function article(noun: string): string {
@@ -159,7 +198,13 @@ export function simulateFight(
     sequence: 0,
     finished: false,
     groundStall: 0,
+    distance: 'mid',
   };
+
+  const profileA = classProfile(a.divisionKey);
+  const profileB = classProfile(b.divisionKey);
+  // A bout has one pace, taken from the heavier man's class when it is a catchweight.
+  const pace: ClassProfile = profileA.tempo >= profileB.tempo ? profileA : profileB;
 
   /**
    * The body of an event, minus everything the engine fills in from the fight's own state.
@@ -240,33 +285,101 @@ export function simulateFight(
     ]) ?? 'mid';
   }
 
-  /** Picks a strike from those available, weighted by plan, skill and what the body allows. */
-  function selectStrike(actor: Combatant, pool: readonly StrikeDefinition[], r: Rng): StrikeDefinition | undefined {
+  /**
+   * Whether a gated technique is available at this moment (brief §3).
+   *
+   * The spinning and flying attacks are not weighed against a jab and found rare — they are
+   * simply not on the menu unless the moment is right. A small weight was tried first and is
+   * not enough: over two hundred fights the flashy set still came out at a fifth of all
+   * offence, because a rare option offered a thousand times is not rare.
+   */
+  function gateOpen(actor: Combatant, opponent: Combatant, definition: StrikeDefinition, leading: boolean): boolean {
+    const gate = definition.gate;
+    if (!gate) return true;
+    const clinched = state.position === 'CLINCH' || state.position === 'CAGE_CLINCH';
+    if (gate.clinchOnly && !clinched && !opponent.stunnedFor) return false;
+    if (gate.flash !== undefined && actor.flash < gate.flash) return false;
+    if (gate.neverLeads && leading) return false;
+    if (gate.opponentRetreating && opponent.retreatingFor <= 0 && opponent.stunnedFor <= 0) return false;
+    if (gate.opponentHurt && opponent.stunnedFor <= 0) return false;
+    if (gate.minStamina !== undefined && effectiveOutput(actor.stamina) < gate.minStamina) return false;
+    return true;
+  }
+
+  /**
+   * How much this strike suits the moment, beyond how often it is thrown in general.
+   *
+   * Selection used to be blind: a weighted draw over the whole legal pool with no idea what
+   * had just happened. Real offence is sequential — the cross comes off the jab, the uppercut
+   * comes when the other man ducks, the leg kick comes when he plants — so the last strike
+   * thrown, the range and the opponent's state all bias the next pick.
+   */
+  function context(actor: Combatant, opponent: Combatant, definition: StrikeDefinition): number {
+    let weight = 1;
+    const previous = actor.lastStrike;
+
+    // Off the jab: the straight and the hook are what follows it.
+    if (previous === 'JAB' && definition.key === 'CROSS') weight *= 2.6;
+    if (previous === 'JAB' && definition.key === 'LEFT_HOOK') weight *= 1.4;
+    // Doubling the jab is a real habit.
+    if (previous === 'JAB' && definition.key === 'JAB') weight *= 1.35;
+    // Hooks follow the straight; the uppercut follows the hook in the pocket.
+    if (previous === 'CROSS' && (definition.key === 'LEFT_HOOK' || definition.key === 'RIGHT_HOOK')) weight *= 1.5;
+    if ((previous === 'LEFT_HOOK' || previous === 'RIGHT_HOOK') && definition.key === 'UPPERCUT') weight *= 1.25;
+    // And the kick comes at the end of the hands, not in the middle of them.
+    if (previous && definition.target === 'LEG') weight *= 1.5;
+
+    // Range does most of the work: the jab is a range weapon, the uppercut is a pocket weapon.
+    if (state.distance === 'long') weight *= definition.key === 'JAB' ? 1.5 : definition.target === 'LEG' ? 1.3 : 0.85;
+    if (state.distance === 'close') weight *= definition.key === 'UPPERCUT' || definition.key === 'ELBOW' ? 1.3 : definition.key === 'JAB' ? 0.6 : 1;
+
+    // A planted opponent gets his leg chopped; a ducking one gets the uppercut.
+    if (opponent.retreatingFor <= 0 && definition.target === 'LEG') weight *= 1.45;
+    // A hurt opponent gets everything heavy thrown at him.
+    if (opponent.stunnedFor > 0) weight *= definition.concussive > 1 ? 2.2 : 0.7;
+
+    return weight;
+  }
+
+  /**
+   * Picks a strike.
+   *
+   * `frequency` is the anchor — the share of a real fighter's output the technique accounts
+   * for — and everything else modulates it. The old selector had no such term at all: it
+   * split a target's weight evenly across every technique aimed there, so a jab and a
+   * spinning wheel kick began from the same number.
+   */
+  function selectStrike(
+    actor: Combatant,
+    opponent: Combatant,
+    pool: readonly StrikeDefinition[],
+    r: Rng,
+    leading = true,
+  ): StrikeDefinition | undefined {
     const plan = actor.plan;
-    // There are four times as many head techniques as leg techniques, so weighting each
-    // option independently made every fighter a head-hunter regardless of their game plan.
-    // Dividing by the number of options for a target makes the plan's split the real split.
-    const optionsPerTarget = new Map<string, number>();
-    for (const definition of pool) {
-      optionsPerTarget.set(definition.target, (optionsPerTarget.get(definition.target) ?? 0) + 1);
-    }
+    const output = effectiveOutput(actor.stamina);
     return choose(
       r,
-      pool.map((definition) => {
-        const targetWeight =
-          definition.target === 'HEAD' ? plan.targetHead
-          : definition.target === 'BODY' ? plan.targetBody
-          : definition.target === 'LEG' ? plan.targetLegs
-          : 0.1;
-        // Skill in the specific technique matters as much as the general facet.
-        const skill = definition.skills.reduce((best, key) => Math.max(best, actor.attributes[key]), 0) / 100;
-        // A tired fighter stops throwing expensive strikes.
-        const affordability = clamp(1.2 - definition.cost * (1 - effectiveOutput(actor.stamina)) * 1.6, 0.05, 1.2);
-        // Power shots come out more when a fighter smells blood or needs a finish.
-        const aggression = definition.concussive > 1 ? 0.6 + plan.urgency * 0.9 : 1;
-        const share = targetWeight / (optionsPerTarget.get(definition.target) ?? 1);
-        return [definition, share * (0.35 + skill) * affordability * aggression] as const;
-      }),
+      pool
+        .filter((definition) => gateOpen(actor, opponent, definition, leading))
+        .map((definition) => {
+          const targetWeight =
+            definition.target === 'HEAD' ? plan.targetHead
+            : definition.target === 'BODY' ? plan.targetBody
+            : definition.target === 'LEG' ? plan.targetLegs
+            : 0.1;
+          // Skill shifts a technique's share but never sets it: a great kicker throws more
+          // kicks than the average fighter, not more kicks than punches.
+          const skill = definition.skills.reduce((best, key) => Math.max(best, actor.attributes[key]), 0) / 100;
+          const affordability = clamp(1.2 - definition.cost * (1 - output) * 1.6, 0.05, 1.2);
+          const weight =
+            definition.frequency *
+            (0.62 + targetWeight * 1.1) *
+            (0.7 + skill * 0.6) *
+            affordability *
+            context(actor, opponent, definition);
+          return [definition, weight] as const;
+        }),
     );
   }
 
@@ -277,19 +390,29 @@ export function simulateFight(
     range: Range,
   ): number {
     const offence = effective(actor, 'strikingOffense');
-    const defence = effective(opponent, 'strikingDefense');
+    // Swelling and cuts close an eye. Facial damage is tracked separately from concussive
+    // load precisely so it can do this rather than only feed the knockout check.
+    const vision = 1 - clamp(opponent.damage.face / 240 + opponent.damage.cuts * 0.045, 0, 0.3);
+    const defence = effective(opponent, 'strikingDefense') * vision;
     const skill = definition.skills.reduce((best, key) => Math.max(best, actor.attributes[key]), 0);
     // The technique's own accuracy, the fighter's skill in it, and reach at distance.
     const base = contest(offence * 0.7 + skill * 0.3, defence);
     const reach = range === 'long' ? reachModifier(reachAdvantage(actor, opponent)) : 1;
-    return clamp(base * definition.accuracy * reach * 0.9, 0.03, 0.9);
+    // Target sets the band the strike lands in: the head is defended, the legs are not.
+    // Measured against the sport's own numbers — head strikes land around a third of the
+    // time, body and leg strikes between a half and two thirds.
+    const byTarget = definition.target === 'HEAD' ? 0.72 : definition.target === 'BODY' ? 1.12 : 1.24;
+    // A fighter caught in his own recovery frames is far easier to hit. This is what makes
+    // committing to a power shot cost something.
+    const exposed = state.elapsed < opponent.vulnerableUntil ? 1.5 : 1;
+    return clamp(base * definition.accuracy * reach * byTarget * exposed * 0.62, 0.03, 0.92);
   }
 
   function resolveStrike(actor: Combatant, opponent: Combatant, definition: StrikeDefinition, range: Range, r: Rng): boolean {
     const stats = currentRound(actor);
     stats.totalStrikesAttempted++;
     if (definition.significant) stats.significantStrikesAttempted++;
-    spend(actor.stamina, definition.cost * (0.7 + actor.plan.pace * 0.6));
+    spend(actor.stamina, definition.cost * (0.7 + actor.plan.pace * 0.6) * classProfile(actor.divisionKey).drain);
 
     const chance = landChanceForStrike(actor, opponent, definition, range);
     const roll = r.next();
@@ -327,6 +450,7 @@ export function simulateFight(
     const damage = clamp(
       definition.power *
         0.22 *
+        classProfile(actor.divisionKey).power *
         remap(powerRating, 1, 100, 0.55, 1.5) *
         remap(durability, 1, 100, 1.35, 0.62) *
         (clean ? 1 : 0.45) *
@@ -336,6 +460,12 @@ export function simulateFight(
     );
 
     applyStrikeDamage(opponent.damage, definition.target, damage, true);
+    // Body work is an investment: it does little immediately and makes everything after it
+    // more expensive. A battered body drains the tank on every action for the rest of the
+    // fight, which is what makes a body-snatcher's round three look the way it does.
+    if (definition.target === 'BODY') {
+      opponent.stamina.cardio = clamp(opponent.stamina.cardio - damage * 0.55, 0, 100);
+    }
     stats.totalStrikesLanded++;
     stats.damageDealt += damage;
     if (definition.significant) {
@@ -392,10 +522,16 @@ export function simulateFight(
     r: Rng,
   ): void {
     if (definition.concussive <= 0) return;
-    const chin = remap(opponent.attributes.durability, 1, 100, 1.6, 0.45);
+    const profile = classProfile(actor.divisionKey);
+    // The class sets the scale; `chin` is how well this class's fighters take a shot at all.
+    const chin = remap(opponent.attributes.durability, 1, 100, 1.6, 0.45) / profile.chin;
     const accumulated = 1 + opponent.damage.concussive / 55;
     const tired = remap(effectiveOutput(opponent.stamina), 0.35, 1, 1.7, 1);
-    const chance = clamp(0.0085 * definition.concussive * (damage / 1.6) * chin * accumulated * tired, 0, 0.35);
+    const chance = clamp(
+      0.0085 * profile.knockdown * definition.concussive * (damage / 1.6) * chin * accumulated * tired,
+      0,
+      0.45,
+    );
 
     if (!r.bool(chance)) {
       // Short of a knockdown, a big shot can still hurt them.
@@ -433,14 +569,18 @@ export function simulateFight(
     // Can they continue? A clean knockout is a failure to recover at all — which, even after
     // a genuine knockdown, is the exception. Most fighters who go down get back up.
     const recovery = remap(opponent.attributes.durability * 0.6 + opponent.attributes.recovery * 0.4, 1, 100, 0.35, 0.03);
-    const koChance = clamp(recovery * (1 + opponent.damage.concussive / 70), 0, 0.8);
+    const koChance = clamp(recovery * profile.finishing * (1 + opponent.damage.concussive / 70), 0, 0.85);
     if (r.bool(koChance)) {
       finish('KO', actor, opponent, definition.key, `${actor.shortName} has knocked them out cold with ${article(definition.label)}.`);
       return;
     }
 
     // Otherwise the follow-up decides it.
-    const followUp = clamp(0.2 + effective(actor, 'strikingOffense') / 480 - opponent.attributes.recovery / 300, 0.05, 0.5);
+    const followUp = clamp(
+      (0.2 + effective(actor, 'strikingOffense') / 480 - opponent.attributes.recovery / 300) * profile.finishing,
+      0.05,
+      0.62,
+    );
     if (r.bool(followUp)) {
       finish('TKO', actor, opponent, definition.key, `${actor.shortName} swarms and the referee has seen enough — it is over.`);
     } else {
@@ -455,45 +595,52 @@ export function simulateFight(
   }
 
   /**
-   * Throws a combination rather than a single shot.
+   * Throws the next strike of a combination.
    *
-   * Fighters do not trade one punch at a time — they throw two, three, four, and the
-   * sequence is what produces both the strike counts a real fight has and the moments where
-   * someone gets caught at the end of a flurry. The combination shortens if the opening
-   * strike is defended cleanly, which is what a fighter actually does.
+   * Combinations used to be resolved in a single burst: the length was drawn up front and all
+   * of it fired before the other fighter existed again. That is why nobody was ever caught
+   * mid-combination. A combination is now a *state* — `comboLeft` on the fighter — and each
+   * strike is a separate action on the tick clock, so the opponent gets his own chances in
+   * between and a fighter who over-commits at the end of a flurry can be countered.
+   *
+   * Returns the seconds the action occupied, which the caller turns into the fighter's next
+   * ready time.
    */
-  function throwCombination(
-    actor: Combatant,
-    opponent: Combatant,
-    pool: readonly StrikeDefinition[],
-    range: Range,
-    r: Rng,
-  ): void {
-    const volume = actor.plan.strikeVolume;
-    const stamina = effectiveOutput(actor.stamina);
-    const length = choose(r, [
-      [1, 1.1 - volume * 0.5],
-      [2, 1.2 + volume * 0.7],
-      [3, (0.85 + volume * 0.9) * stamina],
-      [4, (0.4 + volume * 0.7) * stamina * stamina],
-      [5, (0.15 + volume * 0.4) * stamina * stamina],
-    ]) ?? 1;
+  function throwStrike(actor: Combatant, opponent: Combatant, r: Rng): number {
+    const leading = actor.comboLeft <= 0;
+    const clinched = state.position === 'CLINCH' || state.position === 'CAGE_CLINCH';
+    const pool = clinched ? CLINCH_STRIKES : openStrikes(state.distance);
+    const definition = selectStrike(actor, opponent, pool, r, leading);
+    if (!definition) return 0.3;
 
-    for (let i = 0; i < length; i++) {
-      if (state.finished || isGroundPosition(state.position)) return;
-      const definition = selectStrike(actor, pool, r);
-      if (!definition) return;
-      const landed = resolveStrike(actor, opponent, definition, range, r);
-      // Each strike in the sequence occupies its own moment on the clock. Without this the
-      // play-by-play reports a four-punch combination as four events at the same second.
-      if (i < length - 1) {
-        const beat = r.float(0.6, 1.4);
-        state.clock = Math.max(0, state.clock - beat);
-        state.elapsed += beat;
-      }
-      // A committed miss ends the sequence; a fighter does not keep swinging into space.
-      if (!landed && r.bool(0.45)) return;
+    if (leading) {
+      // 2-4 strikes is the common case; a single shot is the exception, not the rule.
+      const volume = actor.plan.strikeVolume;
+      const output = effectiveOutput(actor.stamina);
+      actor.comboLeft =
+        choose(r, [
+          [1, 0.5 + (1 - volume) * 0.5],
+          [2, 1.5 + volume * 0.5],
+          [3, (1.35 + volume * 0.7) * output],
+          [4, (0.75 + volume * 0.6) * output * output],
+          [5, (0.22 + volume * 0.35) * output * output],
+        ]) ?? 2;
     }
+
+    const landed = resolveStrike(actor, opponent, definition, state.distance, r);
+    actor.lastStrike = definition.key;
+    actor.comboLeft--;
+    if (actor.comboLeft <= 0 && state.distance === 'close' && r.bool(0.72)) state.distance = 'mid';
+    else if (actor.comboLeft <= 0 && state.distance === 'mid' && r.bool(0.3)) state.distance = 'long';
+    // A committed miss ends the sequence; a fighter does not keep swinging into space.
+    if (!landed && r.bool(0.4)) actor.comboLeft = 0;
+
+    // Strikes inside a combination come faster than the first one — that is what makes it a
+    // combination rather than a series of separate decisions.
+    const inCombo = !leading;
+    const duration = definition.time * (inCombo ? 0.78 : 1);
+    actor.vulnerableUntil = state.elapsed + duration + definition.recovery;
+    return duration + definition.recovery * (actor.comboLeft > 0 ? 0.35 : 1);
   }
 
   function resolveTakedown(actor: Combatant, opponent: Combatant, r: Rng): void {
@@ -674,7 +821,7 @@ export function simulateFight(
 
       if (action === 'strike') {
         state.groundStall = 0;
-        const strikeDefinition = selectStrike(actor, GROUND_STRIKES, r);
+        const strikeDefinition = selectStrike(actor, opponent, GROUND_STRIKES, r);
         if (strikeDefinition) resolveStrike(actor, opponent, strikeDefinition, 'close', r);
       } else if (action === 'advance') {
         const target = r.pick(definition.advancesTo);
@@ -778,12 +925,12 @@ export function simulateFight(
   function resolveClinchAction(actor: Combatant, opponent: Combatant, r: Rng): void {
     const action = choose(r, [
       ['strike' as const, actor.plan.strikeVolume * 1.4],
-      ['takedown' as const, actor.plan.takedownRate * 0.8],
+      ['takedown' as const, actor.plan.takedownRate * 0.22],
       ['break' as const, state.topId === actor.id ? 0.35 : 1.4],
     ]);
 
     if (action === 'strike') {
-      const definition = selectStrike(actor, CLINCH_STRIKES, r);
+      const definition = selectStrike(actor, opponent, CLINCH_STRIKES, r);
       if (definition) resolveStrike(actor, opponent, definition, 'close', r);
     } else if (action === 'takedown') {
       resolveTakedown(actor, opponent, r);
@@ -814,32 +961,126 @@ export function simulateFight(
     }
   }
 
-  function resolveStandingAction(actor: Combatant, opponent: Combatant, r: Rng): void {
-    const range = chooseRange(actor, opponent, r);
-    const action = choose(r, [
-      ['strike' as const, actor.plan.strikeVolume * (0.7 + actor.plan.pace * 0.6) * 4.2],
-      ['takedown' as const, actor.plan.takedownRate * 0.15],
-      ['clinch' as const, actor.plan.clinchRate * 0.35],
-      ['reset' as const, 0.5 * (1 - actor.plan.urgency)],
-    ]);
+  /**
+   * Footwork, feints and level changes — the micro-activity a fight is mostly made of.
+   *
+   * A real fight is not a sequence of exchanges with nothing between them. It is constant
+   * movement with strikes as punctuation, and the engine had none of it: every decision was
+   * an attack, a takedown, a clinch entry or a generic "reset". These actions are cheap, they
+   * move the distance, and they set up everything else — a level change sells the takedown
+   * that makes the overhand land.
+   *
+   * Returns the seconds occupied.
+   */
+  function moveOrFeint(actor: Combatant, opponent: Combatant, kind: MicroAction, r: Rng): number {
+    const step = (from: Range, to: Range) => {
+      state.distance = to;
+      return from !== to;
+    };
 
-    if (action === 'strike') {
-      throwCombination(actor, opponent, standingStrikes(range), range, r);
-    } else if (action === 'takedown') {
-      resolveTakedown(actor, opponent, r);
-    } else if (action === 'clinch') {
-      resolveClinchEntry(actor, opponent, r);
-    } else {
-      recover(actor.stamina, 2, false);
+    if (kind === 'advance') {
+      // Closing all the way into the pocket is a commitment, not the default step.
+      const moved = step(state.distance, state.distance === 'long' ? 'mid' : r.bool(0.45) ? 'close' : 'mid');
+      actor.retreatingFor = 0;
+      spend(actor.stamina, 0.14);
+      if (moved && r.bool(0.24)) {
+        emit({
+          eventType: 'POSITION_CHANGE', attacker: actor.id, defender: opponent.id,
+          fromPosition: 'STANDING', toPosition: 'STANDING',
+          description: `${actor.shortName} steps in behind the guard.`,
+        });
+      }
+      return r.float(0.55, 1.1);
+    }
+
+    if (kind === 'retreat') {
+      step(state.distance, state.distance === 'close' ? 'mid' : 'long');
+      actor.retreatingFor = r.float(0.8, 2.2);
+      spend(actor.stamina, 0.12);
+      return r.float(0.6, 1.2);
+    }
+
+    if (kind === 'circle') {
+      actor.retreatingFor = Math.max(actor.retreatingFor, r.float(0.3, 1));
+      spend(actor.stamina, 0.1);
+      // A battered lead leg is what stops a fighter circling, so it costs more when hurt.
+      const hobbled = 1 + actor.damage.leadLeg / 90;
+      return r.float(0.8, 1.8) * hobbled;
+    }
+
+    if (kind === 'feint') {
+      spend(actor.stamina, 0.16);
+      // A feint that works freezes the opponent for a beat, which is what buys the entry.
+      const sold = contest(effective(actor, 'fightIQ' in actor.attributes ? 'strikingOffense' : 'strikingOffense'), effective(opponent, 'strikingDefense'), 0.06);
+      if (r.bool(sold * 0.5)) opponent.readyAt = Math.max(opponent.readyAt, state.elapsed + r.float(0.15, 0.4));
+      if (r.bool(0.2)) {
+        emit({
+          eventType: 'POSITION_CHANGE', attacker: actor.id, defender: opponent.id,
+          fromPosition: 'STANDING', toPosition: 'STANDING',
+          description: `${actor.shortName} feints and ${opponent.shortName} bites on it.`,
+        });
+      }
+      return r.float(0.5, 0.9);
+    }
+
+    // Level change: sells the shot, and is the thing that makes a takedown threat real.
+    spend(actor.stamina, 0.22);
+    if (r.bool(0.28)) {
       emit({
-        eventType: 'POSITION_CHANGE',
-        attacker: actor.id,
-        defender: opponent.id,
-        fromPosition: 'STANDING',
-        toPosition: 'STANDING',
-        description: `${actor.shortName} ${r.pick(OPENERS)}.`,
+        eventType: 'POSITION_CHANGE', attacker: actor.id, defender: opponent.id,
+        fromPosition: 'STANDING', toPosition: 'STANDING',
+        description: `${actor.shortName} drops levels and ${opponent.shortName} has to respect it.`,
       });
     }
+    return r.float(0.5, 0.9);
+  }
+
+  type MicroAction = 'advance' | 'retreat' | 'circle' | 'feint' | 'level';
+
+  /**
+   * One standing decision, on this fighter's own clock. Returns the seconds it occupied.
+   *
+   * The weights are deliberately dominated by movement rather than offence. Counting the
+   * decisions a fighter actually makes in a round, only a minority of them are strikes.
+   */
+  function decideStanding(actor: Combatant, opponent: Combatant, r: Rng): number {
+    // Mid-combination: keep throwing, no re-decision.
+    if (actor.comboLeft > 0) return throwStrike(actor, opponent, r);
+
+    const plan = actor.plan;
+    const profile = classProfile(actor.divisionKey);
+    const output = effectiveOutput(actor.stamina);
+    const hurt = actor.stunnedFor > 0;
+    // Someone who is hurt covers up and moves; they do not start firing back.
+    const offence = hurt ? 0.25 : 1;
+    // Takedown appetite is set by the class profile, scaled by the fighter's own wrestling.
+    const wrestling = effective(actor, 'wrestlingOffense') / 100;
+
+    const action = choose(r, [
+      // Pressure belongs *in* the strike weight, not only against it. It used to feed the
+      // advance weight alone, so a pressure boxer spent his decisions walking forward and a
+      // grappler out-struck him — which is precisely backwards.
+      ['strike' as const, plan.strikeVolume * (0.62 + plan.pressure * 0.95) * profile.volume * output * offence * 1.37],
+      ['advance' as const, 0.75 + plan.pressure * 0.8 + (state.distance === 'long' ? 0.9 : 0.2)],
+      ['retreat' as const, plan.range * 1.1 + (hurt ? 2.4 : 0) + (state.distance === 'close' ? 0.7 : 0.15)],
+      ['circle' as const, 1.5 + plan.counterRate * 0.9],
+      ['feint' as const, 1.15 + plan.counterRate * 0.7],
+      ['level' as const, plan.takedownRate * 0.9],
+      ['takedown' as const, plan.takedownRate ** 1.7 * profile.takedownRate * wrestling * 0.0075 * offence],
+      ['clinch' as const, plan.clinchRate * 0.26 * offence],
+    ]) ?? 'circle';
+
+    if (action === 'strike') return throwStrike(actor, opponent, r);
+    if (action === 'takedown') {
+      resolveTakedown(actor, opponent, r);
+      actor.vulnerableUntil = state.elapsed + 1.2;
+      return 1.2;
+    }
+    if (action === 'clinch') {
+      resolveClinchEntry(actor, opponent, r);
+      return 0.9;
+    }
+    return moveOrFeint(actor, opponent, action, r);
   }
 
   /* ------------------------------------------------------------- the main loop */
@@ -853,99 +1094,152 @@ export function simulateFight(
       beginRound(a);
       beginRound(b);
     }
+    // Both come out of the corner fresh and at range, on their own clocks again.
+    for (const fighter of [a, b]) {
+      fighter.readyAt = state.elapsed;
+      fighter.vulnerableUntil = 0;
+      fighter.comboLeft = 0;
+      fighter.retreatingFor = 0;
+      fighter.lastStrike = undefined;
+    }
+    state.distance = 'mid';
 
     emit({
       eventType: 'ROUND_START',
       description: `Round ${roundNumber}.`,
     });
 
+    /**
+     * The tick loop (brief §1).
+     *
+     * State advances on a fixed 0.1s tick; actions resolve on each fighter's own clock. The
+     * previous loop alternated turns on a coin flip and consumed two to twelve seconds an
+     * exchange, which is why the fight had no texture — nobody could be caught mid-flurry,
+     * nobody was ever a beat late, and a fifteen-minute fight contained about eighty
+     * decisions. This runs nine thousand ticks and lets the two clocks drift against each
+     * other, which is where counters, interruptions and being beaten to the punch come from.
+     *
+     * One RNG per round, drawn in a fixed order, rather than one derived per action: nine
+     * thousand derivations a round is real cost for no determinism gain, since the draw
+     * order is already fixed.
+     */
+    const roundRng = rng.derive('round', roundNumber);
+
     while (state.clock > 0 && !state.finished) {
-      const exchangeRng = rng.derive('exchange', roundNumber, exchangeCount++);
+      state.clock -= TICK;
+      state.elapsed += TICK;
 
-      // Initiative: who acts. Pressure, speed, momentum and being hurt all matter.
-      const initiativeA =
-        a.plan.pressure * 1.4 + effectiveAttributeScore(a) + (a.stunnedFor > 0 ? -1.2 : 0) + a.momentum / 220;
-      const initiativeB =
-        b.plan.pressure * 1.4 + effectiveAttributeScore(b) + (b.stunnedFor > 0 ? -1.2 : 0) + b.momentum / 220;
-      const actorIsA = exchangeRng.bool(clamp(initiativeA / Math.max(0.01, initiativeA + initiativeB), 0.1, 0.9));
-      const actor = actorIsA ? a : b;
-      const opponent = actorIsA ? b : a;
-
-      // Fighters reassess every few exchanges rather than continuously.
-      if (exchangeCount % 4 === 0) {
-        adaptInFight(a, b);
-        adaptInFight(b, a);
+      // Continuous state first, so a decision this tick sees the current picture.
+      recover(a.stamina, TICK, false);
+      recover(b.stamina, TICK, false);
+      for (const fighter of [a, b]) {
+        fighter.stunnedFor = Math.max(0, fighter.stunnedFor - TICK);
+        fighter.retreatingFor = Math.max(0, fighter.retreatingFor - TICK);
+        fighter.momentum *= 0.9993;
       }
 
-      if (isGroundPosition(state.position)) {
-        resolveGroundAction(actor, opponent, exchangeRng);
-      } else if (state.position === 'CLINCH' || state.position === 'CAGE_CLINCH') {
-        resolveClinchAction(actor, opponent, exchangeRng);
-      } else {
-        resolveStandingAction(actor, opponent, exchangeRng);
-      }
-
-      // Time passes. Grappling exchanges eat more clock than a single punch.
       const grappling = isGroundPosition(state.position) || state.position === 'CLINCH' || state.position === 'CAGE_CLINCH';
-      // A stand-up exchange is a few seconds; a grappling exchange eats more clock.
-      const step = clamp(
-        (grappling ? exchangeRng.float(5, 12) : exchangeRng.float(1.8, 4.6)) * (1.3 - actor.plan.pace * 0.45),
-        1.2,
-        16,
-      );
-      state.clock -= step;
-      state.elapsed += step;
-
-      // A stalled position gets restarted. Without this the engine happily spends whole
-      // rounds in a guard where nothing is happening, which is neither realistic nor watchable.
       if (grappling) {
-        state.groundStall += step;
-        if (state.groundStall > 40 && isGroundPosition(state.position)) {
+        state.groundStall += TICK;
+        if (state.topId) {
+          const controller = state.topId === a.id ? a : b;
           const dominance = groundPosition(state.position)?.dominance ?? 0.5;
-          // Referees leave dominant positions alone far longer than a stalled guard.
-          if (exchangeRng.bool(clamp(0.5 - dominance * 0.45, 0.03, 0.5))) {
-            state.position = 'STANDING';
-            state.topId = undefined;
-            state.groundStall = 0;
-            emit({
-              eventType: 'REFEREE_ACTION',
-              action: 'STAND_THEM_UP',
-              description: 'The referee restarts them on the feet.',
-            });
-          }
+          const credited = TICK * (dominance > 0.3 ? 1 : 0.5);
+          controller.controlTime += credited;
+          currentRound(controller).controlTime += credited;
         }
       } else {
         state.groundStall = 0;
       }
 
-      // Control time accrues to whoever is on top.
-      if (grappling && state.topId) {
-        const controller = state.topId === a.id ? a : b;
-        const dominance = groundPosition(state.position)?.dominance ?? 0.5;
-        const credited = step * (dominance > 0.3 ? 1 : 0.5);
-        controller.controlTime += credited;
-        currentRound(controller).controlTime += credited;
+      // Each fighter acts on their own timer. Order is fixed for determinism; the timers
+      // themselves are what decide who actually gets to move.
+      for (const [actor, opponent] of [[a, b], [b, a]] as const) {
+        if (state.finished || state.clock <= 0) break;
+        if (state.elapsed < actor.readyAt) continue;
+
+        let occupied: number;
+        if (isGroundPosition(state.position)) {
+          resolveGroundAction(actor, opponent, roundRng);
+          occupied = roundRng.float(1.6, 3.4);
+        } else if (state.position === 'CLINCH' || state.position === 'CAGE_CLINCH') {
+          resolveClinchAction(actor, opponent, roundRng);
+          occupied = roundRng.float(1.1, 2.6);
+        } else {
+          occupied = decideStanding(actor, opponent, roundRng);
+        }
+
+        // Class tempo stretches or compresses every action; a heavyweight fight is slower
+        // everywhere, not merely less accurate.
+        actor.readyAt = state.elapsed + Math.max(TICK, occupied * pace.tempo);
       }
 
-      // Recovery and the stun clock.
-      recover(a.stamina, step, false);
-      recover(b.stamina, step, false);
-      a.stunnedFor = Math.max(0, a.stunnedFor - step);
-      b.stunnedFor = Math.max(0, b.stunnedFor - step);
-      // Momentum decays toward neutral.
-      a.momentum *= 0.94;
-      b.momentum *= 0.94;
+      // Commentary beats: the things a broadcast would actually remark on. Emitted at most
+      // once each per fighter per round, so they read as observations rather than a ticker.
+      for (const fighter of [a, b]) {
+        if (state.finished) break;
+        if (!fighter.noted.legs && fighter.damage.leadLeg > 34) {
+          fighter.noted.legs = true;
+          emit({
+            eventType: 'DAMAGE_UPDATE', fighterId: fighter.id,
+            damage: { ...fighter.damage, leadLeg: roundTo(fighter.damage.leadLeg, 1) },
+            description: `${fighter.shortName} is limping now — that lead leg has been chopped up and the circling has stopped.`,
+          });
+        }
+        if (!fighter.noted.gassed && effectiveOutput(fighter.stamina) < 0.62 && state.round >= 2) {
+          fighter.noted.gassed = true;
+          emit({
+            eventType: 'STAMINA_UPDATE', fighterId: fighter.id,
+            stamina: { burst: roundTo(fighter.stamina.burst, 0), cardio: roundTo(fighter.stamina.cardio, 0) },
+            description: `The pace has dropped. ${fighter.shortName} has their hands on their knees between exchanges.`,
+          });
+        }
+        if (!fighter.noted.body && fighter.damage.body > 30) {
+          fighter.noted.body = true;
+          emit({
+            eventType: 'DAMAGE_UPDATE', fighterId: fighter.id,
+            damage: { ...fighter.damage, leadLeg: roundTo(fighter.damage.leadLeg, 1) },
+            description: `${fighter.shortName} is wincing every time that body shot lands — the investment is paying off.`,
+          });
+        }
+      }
+
+      // Fighters reassess a few times a round rather than continuously.
+      if (Math.abs(state.elapsed % 25) < TICK / 2) {
+        adaptInFight(a, b);
+        adaptInFight(b, a);
+      }
+
+      // A stalled position gets restarted.
+      if (state.groundStall > 40 && isGroundPosition(state.position)) {
+        const dominance = groundPosition(state.position)?.dominance ?? 0.5;
+        if (roundRng.bool(clamp(0.02 - dominance * 0.018, 0.001, 0.02))) {
+          state.position = 'STANDING';
+          state.topId = undefined;
+          state.groundStall = 0;
+          state.distance = 'mid';
+          emit({
+            eventType: 'REFEREE_ACTION',
+            action: 'STAND_THEM_UP',
+            description: 'The referee restarts them on the feet.',
+          });
+        }
+      }
 
       // The doctor gets involved when a cut is bad enough.
-      if (!state.finished && needsDoctor(opponent.damage) && exchangeRng.bool(0.015)) {
-        emit({
-          eventType: 'DOCTOR_CHECK',
-          fighterId: opponent.id,
-          action: 'CUT_INSPECTION',
-          description: `The referee calls time — the doctor takes a look at ${opponent.shortName}'s cut.`,
-        });
-        if (exchangeRng.bool(0.18)) {
-          finish('DOCTOR_STOPPAGE', actor, opponent, undefined, `The doctor will not let them continue. ${actor.shortName} wins by doctor stoppage.`);
+      if (!state.finished && roundRng.bool(0.0006)) {
+        for (const [hurt, other] of [[a, b], [b, a]] as const) {
+          if (!needsDoctor(hurt.damage)) continue;
+          emit({
+            eventType: 'DOCTOR_CHECK',
+            fighterId: hurt.id,
+            action: 'CUT_INSPECTION',
+            description: `The referee calls time — the doctor takes a look at ${hurt.shortName}'s cut.`,
+          });
+          if (roundRng.bool(0.18)) {
+            finish('DOCTOR_STOPPAGE', other, hurt, undefined, `The doctor will not let them continue. ${other.shortName} wins by doctor stoppage.`);
+          }
+          break;
         }
       }
     }
@@ -992,8 +1286,10 @@ export function simulateFight(
         }
       }
 
-      recoverBetweenRounds(a.stamina);
-      recoverBetweenRounds(b.stamina);
+      // Heavier fighters get less back on the stool, which is what makes their round threes
+      // look the way they do.
+      recoverBetweenRounds(a.stamina, classProfile(a.divisionKey).recovery);
+      recoverBetweenRounds(b.stamina, classProfile(b.divisionKey).recovery);
       recoverDamageBetweenRounds(a.damage);
       recoverDamageBetweenRounds(b.damage);
       a.stunnedFor = 0;
@@ -1069,6 +1365,9 @@ export function simulateFight(
     events,
     scorecards,
     stats: { [a.id]: statsFor(a), [b.id]: statsFor(b) },
+    // Per-round, per-fighter, for the round-by-round overlay (brief §4). Already tracked;
+    // it was simply never handed out.
+    roundStats: { [a.id]: a.stats.map(snapshot), [b.id]: b.stats.map(snapshot) },
     damage: { [a.id]: roundTo(totalDamage(a.damage), 1), [b.id]: roundTo(totalDamage(b.damage), 1) },
   };
 }

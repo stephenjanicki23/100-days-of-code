@@ -74,9 +74,15 @@ export function recover(stamina: Stamina, seconds: number, resting: boolean): vo
   stamina.cardio = clamp(stamina.cardio + (resting ? 0.55 : 0.012) * seconds, 0, 100);
 }
 
-/** Between-rounds recovery: sixty seconds on the stool. */
-export function recoverBetweenRounds(stamina: Stamina): void {
-  recover(stamina, 60, true);
+/**
+ * Between-rounds recovery: sixty seconds on the stool.
+ *
+ * `rate` comes from the weight class — a flyweight comes back out close to fresh and a
+ * heavyweight does not, which is a large part of why heavyweight round threes look the way
+ * they do.
+ */
+export function recoverBetweenRounds(stamina: Stamina, rate = 1): void {
+  recover(stamina, 60 * rate, true);
 }
 
 /** A readable label for the UI and for commentary. */
