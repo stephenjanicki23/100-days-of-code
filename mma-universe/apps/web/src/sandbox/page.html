@@ -1,0 +1,405 @@
+<title>Fight Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  /*
+    Committed to a single dark world rather than following the viewer's theme. The stage in the
+    middle of this page is an arena at night and cannot be anything else, and a tool that
+    inverts around a fixed black viewport reads as two pages stapled together. Every colour is
+    therefore painted explicitly, so the page holds whatever ground the host puts behind it.
+
+    Red and blue are not the accent. In this sport the corner colour *is* the information —
+    which fighter, which glove, which side of the scorecard — so they are spent on that and
+    nothing else. Gold is the belt and the one action that starts a fight.
+  */
+  :root {
+    --ground: #10131a;
+    --surface: #171b24;
+    --raised: #1e242f;
+    --rule: #2b3341;
+    --rule-soft: #212734;
+    --ink: #e8ebf1;
+    --ink-dim: #8e99ac;
+    --ink-faint: #5d6779;
+    --red: #d8434e;
+    --blue: #3d72e8;
+    --gold: #e3b74c;
+    --gold-dim: #6d5522;
+    --ui: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 34px 22px 64px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  /* ------------------------------------------------------------------ masthead */
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+  h1 { margin: 6px 0 0; font-size: clamp(28px, 4vw, 40px); font-weight: 700; letter-spacing: -0.025em; }
+  .standfirst { margin: 8px 0 0; max-width: 68ch; color: var(--ink-dim); }
+  .standfirst strong { color: var(--ink); font-weight: 600; }
+
+  /* -------------------------------------------------------------- universe bar */
+
+  .universe {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    border-radius: 4px;
+  }
+  .universe label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-faint); }
+  .universe input { width: 170px; }
+  #built { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); margin-left: auto; }
+
+  input[type='text'], select {
+    padding: 7px 9px;
+    background: var(--raised);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    font-size: 13px;
+  }
+  input[type='text']::placeholder { color: var(--ink-faint); }
+
+  .btn {
+    padding: 7px 13px;
+    background: var(--raised);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--gold-dim); }
+  .btn.primary {
+    background: var(--gold);
+    border-color: var(--gold);
+    color: #1a1405;
+    font-weight: 600;
+  }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.primary:disabled { background: var(--raised); color: var(--ink-faint); border-color: var(--rule); cursor: not-allowed; filter: none; }
+
+  /* -------------------------------------------------------------------- layout */
+
+  .lab { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, 1fr); gap: 22px; align-items: start; }
+  @media (max-width: 940px) { .lab { grid-template-columns: 1fr; } }
+
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 9px;
+  }
+
+  /* -------------------------------------------------------------------- roster */
+
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .filters input { flex: 1 1 160px; min-width: 120px; }
+  #count { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); align-self: center; margin-left: auto; }
+
+  .roster-wrap { max-height: 520px; overflow: auto; border: 1px solid var(--rule-soft); border-radius: 4px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--raised);
+    padding: 8px 10px;
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  tbody td { padding: 7px 10px; border-bottom: 1px solid var(--rule-soft); vertical-align: middle; }
+  tbody tr:hover { background: var(--raised); }
+  tbody tr.a { box-shadow: inset 3px 0 0 var(--red); }
+  tbody tr.b { box-shadow: inset 3px 0 0 var(--blue); }
+
+  .rank { font-family: var(--mono); font-size: 12px; color: var(--gold); width: 36px; }
+  .rank b { color: var(--gold); }
+  .who { min-width: 180px; }
+  .nm { display: block; font-weight: 600; font-size: 14px; }
+  .sub { display: block; font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+  .div { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); text-transform: capitalize; white-space: nowrap; }
+  .num { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-dim); white-space: nowrap; }
+  .ca { color: var(--ink); }
+  .pick { white-space: nowrap; width: 74px; }
+  .pick button {
+    width: 26px; height: 24px;
+    background: var(--raised);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-dim);
+    cursor: pointer;
+  }
+  .pick button:first-child:hover { border-color: var(--red); color: var(--red); }
+  .pick button:last-child { margin-left: 4px; }
+  .pick button:last-child:hover { border-color: var(--blue); color: var(--blue); }
+
+  /* ------------------------------------------------------------------- corners */
+
+  .corners { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .corner {
+    padding: 12px 13px;
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    border-top: 2px solid var(--rule);
+    border-radius: 4px;
+    min-height: 232px;
+  }
+  .corner.red { border-top-color: var(--red); }
+  .corner.blue { border-top-color: var(--blue); }
+  .corner h3 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .corner .sub { margin: 2px 0 9px; text-transform: capitalize; }
+  .corner .empty { color: var(--ink-faint); font-size: 13px; margin: 0; }
+  .tp {
+    display: flex; justify-content: space-between; gap: 8px;
+    padding: 4px 0;
+    border-top: 1px solid var(--rule-soft);
+    font-family: var(--mono); font-size: 11.5px;
+  }
+  .tp span { color: var(--ink-faint); }
+  .tp b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+  .bout { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .bout label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-faint); }
+  .bout input { width: 130px; }
+  #run { margin-left: auto; }
+  .warn {
+    margin: 9px 0 0;
+    padding: 7px 10px;
+    background: #2a1e12;
+    border-left: 2px solid var(--gold);
+    font-size: 12.5px;
+    color: var(--ink-dim);
+  }
+
+  /* -------------------------------------------------------------------- result */
+
+  .verdict {
+    padding: 12px 14px;
+    background: var(--surface);
+    border-left: 2px solid var(--gold);
+    font-size: 15px;
+    color: var(--ink-dim);
+  }
+  .verdict strong { color: var(--ink); }
+
+  .readout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(200px, 1fr); gap: 18px; margin-top: 14px; }
+  @media (max-width: 760px) { .readout { grid-template-columns: 1fr; } }
+
+  .tape-row {
+    display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: baseline;
+    padding: 7px 0; border-top: 1px solid var(--rule-soft);
+    font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums;
+  }
+  .tape-row span:first-child { text-align: left; color: var(--ink); }
+  .tape-row span:last-child { text-align: right; color: var(--ink); }
+  .tape-row em { font-style: normal; font-size: 10px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-faint); }
+  .tape-row.head { border-top: 0; }
+  .tape-row.head span { font-family: var(--ui); font-weight: 600; font-size: 13px; }
+  .tape-row.head span:first-child { color: var(--red); }
+  .tape-row.head span:last-child { color: var(--blue); }
+
+  #cards ul { list-style: none; margin: 0; padding: 0; }
+  #cards li {
+    padding: 6px 0; border-top: 1px solid var(--rule-soft);
+    font-family: var(--mono); font-size: 12px; color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --------------------------------------------------------------------- stage */
+
+  .stage {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    background: #070910;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .stage canvas { display: block; width: 100%; height: 100%; }
+  .stage .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 30px; color: var(--ink-dim); text-align: center; }
+
+  .hud { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 14px; padding: 12px 16px; pointer-events: none; }
+  .hud-top { top: 0; background: linear-gradient(#000000ad, #0000); }
+  .hud-bottom { bottom: 0; background: linear-gradient(#0000, #000000bb); }
+  .hud-name { flex: 1; font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .hud-name.right { justify-content: flex-end; }
+  .dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+  .dot.red { background: var(--red); }
+  .dot.blue { background: var(--blue); }
+  #hud-clock { font-family: var(--mono); font-weight: 700; color: var(--gold); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #hud-cam {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-dim); border: 1px solid var(--rule); border-radius: 2px; padding: 2px 6px; white-space: nowrap; flex: none;
+  }
+  #hud-line { font-size: 14px; color: #f2f5fa; }
+
+  .transport {
+    display: flex; align-items: center; gap: 11px; flex-wrap: wrap;
+    padding: 10px 13px; margin-top: 10px;
+    background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 4px;
+  }
+  .transport input[type='range'] { flex: 1 1 200px; min-width: 130px; accent-color: var(--gold); background: transparent; }
+  #time { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* -------------------------------------------------------------------- stream */
+
+  .stream { list-style: none; margin: 10px 0 0; padding: 0; max-height: 260px; overflow-y: auto; background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 4px; }
+  .stream li {
+    display: grid; grid-template-columns: 92px 150px 78px 1fr; gap: 12px; align-items: baseline;
+    padding: 5px 13px; border-bottom: 1px solid var(--rule-soft);
+    font-family: var(--mono); font-size: 11.5px; cursor: pointer;
+  }
+  .stream li:hover { background: var(--raised); }
+  .c1 { color: var(--gold); font-variant-numeric: tabular-nums; }
+  .c2 { color: var(--ink); }
+  .c3 { color: var(--ink-faint); }
+  .c4 { font-family: var(--ui); font-size: 12.5px; color: var(--ink-dim); }
+  @media (max-width: 720px) { .stream li { grid-template-columns: 1fr 1fr; } .c4 { grid-column: 1 / -1; } }
+
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">MMA Universe · Sandbox</span>
+    <h1>Fight Lab</h1>
+    <p class="standfirst">
+      The simulation itself is in this page — not a recording of it. The engine is pure and
+      I/O-free, so it compiles into the browser and <strong>builds the universe on load</strong>:
+      six hundred fighters, their attributes, camps, records and rankings, from one seed.
+      Pick any two and run the fight. Nothing below was prepared in advance.
+    </p>
+  </header>
+
+  <div class="universe">
+    <label for="seed">Universe seed</label>
+    <input type="text" id="seed" value="sandbox" spellcheck="false">
+    <button class="btn" id="generate">Rebuild</button>
+    <span id="built"></span>
+  </div>
+
+  <div class="lab">
+    <section>
+      <p class="panel-title">Roster</p>
+      <div class="filters">
+        <select id="division"></select>
+        <select id="sort">
+          <option value="ability">Sort: ability</option>
+          <option value="rank">Sort: ranking</option>
+          <option value="wins">Sort: wins</option>
+          <option value="name">Sort: name</option>
+          <option value="age">Sort: age</option>
+        </select>
+        <input type="text" id="search" placeholder="Name or style…" spellcheck="false">
+        <span id="count"></span>
+      </div>
+      <div class="roster-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th></th><th>Fighter</th><th>Division</th><th>Record</th><th>Age</th><th>CA</th><th>Corner</th>
+            </tr>
+          </thead>
+          <tbody id="roster"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <p class="panel-title">The bout</p>
+      <div class="corners">
+        <div class="corner red" id="corner-0"></div>
+        <div class="corner blue" id="corner-1"></div>
+      </div>
+      <p class="warn" id="mismatch" hidden>These two are in different divisions. The engine will run it anyway — a useful thing to test, and not a fight a commission would sanction.</p>
+      <div class="bout">
+        <label for="rounds">Rounds</label>
+        <select id="rounds"><option value="3">3</option><option value="5">5</option></select>
+        <label for="fight-seed">Seed</label>
+        <input type="text" id="fight-seed" placeholder="auto" spellcheck="false">
+        <button class="btn" id="swap">Swap</button>
+        <button class="btn" id="random">Random</button>
+        <button class="btn primary" id="run" disabled>Run fight</button>
+      </div>
+    </section>
+  </div>
+
+  <section id="result" hidden>
+    <p class="panel-title">Result</p>
+    <div class="verdict" id="verdict"></div>
+    <div class="readout">
+      <div id="stats"></div>
+      <div><p class="panel-title">Scorecards</p><div id="cards"></div></div>
+    </div>
+  </section>
+
+  <section id="replay" hidden>
+    <p class="panel-title">Replay</p>
+    <div class="stage" id="stage">
+      <div class="hud hud-top">
+        <span class="hud-name"><i class="dot red"></i><span id="hud-a"></span></span>
+        <span id="hud-clock"></span>
+        <span class="hud-name right"><span id="hud-b"></span><i class="dot blue"></i></span>
+      </div>
+      <div class="hud hud-bottom">
+        <span id="hud-cam"></span>
+        <span id="hud-line"></span>
+      </div>
+    </div>
+    <div class="transport">
+      <button class="btn" id="play">Pause</button>
+      <input type="range" id="scrub" min="0" max="100" step="0.02" value="0">
+      <span id="time">00:00 / 00:00</span>
+      <select id="rate">
+        <option value="1">1×</option>
+        <option value="0.35">0.35×</option>
+        <option value="0.6">0.6×</option>
+        <option value="2">2×</option>
+      </select>
+    </div>
+    <p class="panel-title" style="margin-top:16px">Event stream — the renderer's only input</p>
+    <ul class="stream" id="stream"></ul>
+  </section>
+</div>
