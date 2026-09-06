@@ -330,6 +330,44 @@ in the scene will interpenetrate without inverse kinematics. Swapping in a rigge
 means replacing `skeleton.ts` and nothing else, since what it consumes is joint rotations, which
 any humanoid rig accepts.
 
+### 8.2 The offline renderer (Sprint 20)
+
+There is a second renderer: `tools/render_blender.py`, which path-traces frames with Cycles on
+a CPU. It exists because the two things that most separate a render from a photograph — light
+that scatters *through* skin, and shadows soft because the lights have area — are not available
+in real time on integrated graphics, and are entirely available if the frames are computed once
+and played back as video.
+
+It is the strongest evidence for the event contract in the project. The path tracer shares no
+code with the browser: different language, different renderer, different machine, no three.js.
+The two agree on what a fight looks like because `tools/export-render.ts` hands both of them the
+same thing — a timeline built by the same `player.ts`, sampled at the same times, with camera
+framing from the same `solveCamera`. An engine client would be a third consumer on identical
+terms.
+
+```
+FightEvent ─▶ AnimationDirective ─▶ player.ts (timeline, poses, camera)
+                                      ├─▶ three.js  → real time, interactive
+                                      └─▶ Cycles    → path traced, offline
+```
+
+Skinning happens once on the Python side rather than being baked per frame into the export,
+which keeps a 108-frame clip at 0.6 MB instead of tens of megabytes.
+
+**What the offline path buys, measured rather than asserted:** real subsurface scattering
+(Principled BSDF, radius in millimetres), area lights with true penumbrae, global illumination
+bouncing off the canvas into the shadow side of a body, depth of field, and a chain-link fence
+modelled as bevelled curves instead of the alpha-cut planes the first attempt used — those
+rendered as solid grey panels and were the worst thing in frame. Roughly 14 seconds per frame at
+900 px on four cores; about 55 seconds at 1280 px with 110 samples.
+
+**What it costs:** it is not interactive. The browser viewer remains the way to scrub a whole
+fight, and it now measures its own frame cost for the first second of playback and drops its
+post chain once if the machine cannot hold 30 fps — a one-way decision, because a renderer that
+keeps re-deciding oscillates between two looks, which is worse than either.
+
+---
+
 **Three defects the tests now guard**, all found by rendering rather than by reading:
 
 - Spinning techniques unwound backwards on recovery, because a keyframe pair more than half a

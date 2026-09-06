@@ -73,6 +73,9 @@ consumes them is `apps/web/src/three`: a three.js viewer reading
 primitives and 56 clips authored as keyframe data rather than downloaded as assets. See
 `docs/ARCHITECTURE.md` §8.1 for why the reference renderer is a browser one and what that costs.
 
+There are now two renderers on that contract: the browser viewer, and an offline path tracer
+(`tools/render_blender.py`) that shares no code with it. See `docs/ARCHITECTURE.md` §8.1 and §8.2.
+
 Remaining: the live-feed parser of §18, which converts external play-by-play text into the same
-event objects, and — if wanted — an Unreal or Unity client, which would be a second consumer of
+event objects, and — if wanted — an Unreal or Unity client, which would be a third consumer of
 the identical JSON contract rather than a change to anything upstream of it.

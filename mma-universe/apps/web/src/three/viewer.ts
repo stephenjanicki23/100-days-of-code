@@ -17,7 +17,8 @@ import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import type { Frame, Timeline } from './player.ts';
 import { sampleFrame } from './player.ts';
 import { FighterModel, PALETTE_A, PALETTE_B } from './skeleton.ts';
-import { CAMERA_LEASH, CAMERA_PRESETS, buildArena, buildLighting } from './scene.ts';
+import { buildArena, buildLighting } from './scene.ts';
+import { solveCamera } from './camera.ts';
 import type { Arena } from './scene.ts';
 
 export interface ViewerOptions {
@@ -25,6 +26,8 @@ export interface ViewerOptions {
   readonly onFrame?: (frame: Frame) => void;
   /** Called once if WebGL is unavailable, so the page can say so rather than sit blank. */
   readonly onError?: (message: string) => void;
+  /** Reports the quality tier the viewer settled on, once it has measured itself. */
+  readonly onQuality?: (tier: 'full' | 'reduced') => void;
 }
 
 export class FightViewer {
@@ -46,6 +49,9 @@ export class FightViewer {
   private timeline?: Timeline;
   private raf = 0;
   private lastTick = 0;
+  /** Rolling frame costs, used once to decide whether this machine can afford the post chain. */
+  private readonly costs: number[] = [];
+  private downgraded = false;
   private lastWidth = 0;
   private lastHeight = 0;
   private time = 0;
@@ -164,6 +170,7 @@ export class FightViewer {
     const step = (now: number) => {
       if (!this.running) return;
       const delta = Math.min((now - this.lastTick) / 1000, 0.1);
+      this.measure(delta);
       this.lastTick = now;
       this.time += delta * this.rate;
       if (this.time >= this.duration) {
@@ -174,6 +181,38 @@ export class FightViewer {
       if (this.running) this.raf = requestAnimationFrame(step);
     };
     this.raf = requestAnimationFrame(step);
+  }
+
+  /**
+   * Adaptive quality.
+   *
+   * Bloom, antialiasing and a 2x pixel ratio are cheap on a discrete GPU and expensive on
+   * integrated graphics, where they turn a smooth replay into a slideshow. Rather than ask
+   * anyone to pick a quality setting, the viewer watches its own frame cost for the first
+   * second of playback and drops the post chain once if it cannot hold a reasonable rate.
+   *
+   * One-way on purpose: a renderer that keeps re-deciding oscillates, and the flicker between
+   * two looks is worse than either.
+   */
+  private measure(delta: number): void {
+    if (this.downgraded || this.costs.length > 60) return;
+    this.costs.push(delta);
+    if (this.costs.length < 45) return;
+
+    const sorted = [...this.costs].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
+    // Slower than about 30 fps sustained: buy the frame rate back.
+    if (median > 0.033) {
+      this.downgraded = true;
+      this.renderer.setPixelRatio(1);
+      this.renderer.shadowMap.enabled = false;
+      this.scene.environmentIntensity = 0.22;
+      this.resize();
+      this.options.onQuality?.('reduced');
+    } else {
+      this.downgraded = true;
+      this.options.onQuality?.('full');
+    }
   }
 
   pause(): void {
@@ -207,46 +246,27 @@ export class FightViewer {
     this.fighterB.applyPose(frame.b.pose);
     this.fighterB.setPlacement(frame.b.position, frame.b.yaw);
 
-    const preset = CAMERA_PRESETS[frame.camera] ?? CAMERA_PRESETS.BROADCAST;
     const centreX = (frame.a.position[0] + frame.b.position[0]) / 2;
     const centreZ = (frame.a.position[2] + frame.b.position[2]) / 2;
-    this.desiredPosition.set(centreX + preset.offset[0], preset.offset[1], centreZ + preset.offset[2]);
-    // Keep the lens inside the fence; a post in the foreground ruins any framing.
-    const reach = Math.hypot(this.desiredPosition.x, this.desiredPosition.z);
-    if (reach > CAMERA_LEASH) {
-      this.desiredPosition.x *= CAMERA_LEASH / reach;
-      this.desiredPosition.z *= CAMERA_LEASH / reach;
-    }
-    this.desiredTarget.set(centreX, preset.lookHeight, centreZ);
-
-    /**
-     * A little handheld float.
-     *
-     * A camera on a perfect spline reads as CAD, not as coverage — the eye notices the absence
-     * of an operator. Three incommensurate low frequencies at a few centimetres are enough to
-     * suggest one, and because they are a function of the timeline clock rather than of a
-     * random source, a paused frame is stable and a replay is identical.
-     */
-    const float = time;
-    this.desiredPosition.x += Math.sin(float * 0.53) * 0.035 + Math.sin(float * 1.31) * 0.012;
-    this.desiredPosition.y += Math.sin(float * 0.71 + 1.4) * 0.022;
-    this.desiredPosition.z += Math.sin(float * 0.43 + 2.6) * 0.03;
-    this.desiredTarget.y += Math.sin(float * 0.61 + 0.8) * 0.012;
+    const shot = solveCamera(frame.camera, centreX, centreZ, time);
+    this.desiredPosition.set(shot.position[0], shot.position[1], shot.position[2]);
+    this.desiredTarget.set(shot.target[0], shot.target[1], shot.target[2]);
 
     if (snapCamera) {
       this.camera.position.copy(this.desiredPosition);
       this.cameraTarget.copy(this.desiredTarget);
-      this.camera.fov = preset.fov;
+      this.camera.fov = shot.fov;
     } else {
       const damping = 1 - Math.exp(-6 * delta);
       this.camera.position.lerp(this.desiredPosition, damping);
       this.cameraTarget.lerp(this.desiredTarget, damping);
-      this.camera.fov += (preset.fov - this.camera.fov) * damping;
+      this.camera.fov += (shot.fov - this.camera.fov) * damping;
     }
     this.camera.updateProjectionMatrix();
     this.camera.lookAt(this.cameraTarget);
 
-    this.composer.render();
+    if (this.downgraded && !this.renderer.shadowMap.enabled) this.renderer.render(this.scene, this.camera);
+    else this.composer.render();
     this.options.onFrame?.(frame);
   }
 
