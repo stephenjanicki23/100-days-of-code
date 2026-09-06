@@ -24,7 +24,8 @@ import type { AnimationBeatWire, CameraHint, FightEventWire, FightPositionWire }
 import type { Clip } from './clips.ts';
 import { REACTIONS, isGrounded, resolveClip, restPose } from './clips.ts';
 import type { ResolvedPose } from './blend.ts';
-import { blendPose, resolvePose, sampleClip } from './blend.ts';
+import { blendPose, blendPoseShortest, ease, resolvePose, sampleClip } from './blend.ts';
+import { addLife, fatigueForRound } from './life.ts';
 import type { Vec3 } from './rig.ts';
 
 export type Pacing = 'CONDENSED' | 'REALTIME';
@@ -35,6 +36,26 @@ const CONDENSED_GAP = 0.1;
 const MIN_REALTIME_STEP = 0.09;
 /** Time the last pose is held so a finish does not cut to black on the frame it lands. */
 const TAIL = 1.5;
+/**
+ * How long a new beat takes to take over from the pose the previous one left behind.
+ *
+ * Without this every beat begins from its clip's first keyframe — a stance — so the fighter
+ * snapped back to neutral and started again between every single action. That discontinuity,
+ * repeated a few hundred times a fight, is most of what reads as robotic.
+ */
+const CARRY_OVER = 0.16;
+/** Phase offsets for the idle layer, so the two fighters are never breathing in lockstep. */
+const LIFE_PHASE = [0, 3.71] as const;
+/**
+ * How long a reaction takes to take over the defender's body, and to hand it back.
+ *
+ * Reactions are authored from a neutral stance, but the fighter receiving one may be wobbling,
+ * tied up in the clinch or already on the canvas. Cutting straight to the clip's first frame
+ * snapped the guard through more than a radian in one frame — the same reset the beat carry-
+ * over fixes, one level down.
+ */
+const REACTION_TAKEOVER = 0.09;
+const REACTION_RELEASE = 0.18;
 
 export interface TimelineBeat {
   readonly index: number;
@@ -195,9 +216,66 @@ export function beatAt(timeline: Timeline, time: number): TimelineBeat | undefin
 
 const IDLE = resolvePose(restPose('STANDING', 'ACTOR'));
 
+/** Both fighters' poses within one beat, before any carry-over or idle layer. */
+interface BeatPoses {
+  readonly a: ResolvedPose;
+  readonly b: ResolvedPose;
+  /** How occupied each fighter is, 0 (mid-technique) to 1 (at rest). Scales the idle layer. */
+  readonly aRest: number;
+  readonly bRest: number;
+}
+
+function posesForBeat(timeline: Timeline, beat: TimelineBeat, time: number): BeatPoses {
+  const duration = Math.max(beat.end - beat.start, 0.001);
+  const u = (time - beat.start) / duration;
+  const shared = beat.actorId === undefined;
+
+  const actorPose = sampleClip(beat.clip, u);
+  const reactorPose = shared ? actorPose : reactionPose(beat, time);
+
+  // A fighter mid-strike should not also be bouncing in their stance, so the idle layer is
+  // damped in proportion to how close this frame is to the moment of the technique.
+  const actorRest = Math.max(0.3, Math.min(1, Math.abs(u - beat.clip.impactAt) * 3));
+  const reacting = time >= beat.impactAt && time - beat.impactAt < beat.reaction.duration;
+  const reactorRest = shared ? actorRest : reacting ? 0.35 : 1;
+
+  const actorIsA = shared ? true : beat.actorId === timeline.fighterA;
+  return {
+    a: actorIsA ? actorPose : reactorPose,
+    b: actorIsA ? reactorPose : actorPose,
+    aRest: actorIsA ? actorRest : reactorRest,
+    bRest: actorIsA ? reactorRest : actorRest,
+  };
+}
+
+/**
+ * Where the engagement sits, moving continuously.
+ *
+ * `beat.centre` is a step function — one value per beat — so using it directly teleported both
+ * fighters to a new patch of canvas on every action. Treating it as the position reached by
+ * the *end* of the beat, starting from where the previous beat left them, turns the same data
+ * into footwork at about half a metre a second.
+ */
+function centreAt(
+  timeline: Timeline,
+  beat: TimelineBeat,
+  u: number,
+): { x: number; z: number; half: number } {
+  const previous = timeline.beats[beat.index - 1];
+  const from = previous ? previous.centre : beat.centre;
+  const fromSpacing = previous ? previous.spacing : beat.spacing;
+  const k = ease(Math.max(0, Math.min(1, u)));
+  return {
+    x: from[0] + (beat.centre[0] - from[0]) * k,
+    z: from[2] + (beat.centre[2] - from[2]) * k,
+    half: (fromSpacing + (beat.spacing - fromSpacing) * k) / 2,
+  };
+}
+
 /**
  * The whole frame, from the timeline and a clock. Pure: no state, no accumulation, so a
- * seek and a play arrive at identical frames.
+ * seek and a play arrive at identical frames — the idle layer included, because it is a
+ * function of absolute time rather than of a random source.
  */
 export function sampleFrame(timeline: Timeline, time: number): Frame {
   const beat = beatAt(timeline, time);
@@ -213,22 +291,43 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
     };
   }
 
-  const elapsed = time - beat.start;
   const duration = Math.max(beat.end - beat.start, 0.001);
+  const elapsed = time - beat.start;
   const u = elapsed / duration;
-  const shared = beat.actorId === undefined;
 
-  const actorPose = sampleClip(beat.clip, u);
-  const reactorPose = shared
-    ? actorPose
-    : reactionPose(beat, time);
+  let poses = posesForBeat(timeline, beat, time);
 
-  const half = beat.spacing / 2;
-  const [cx, , cz] = beat.centre;
+  // Take over from wherever the previous beat left the body, rather than cutting to this
+  // clip's opening stance.
+  const previous = timeline.beats[beat.index - 1];
+  if (previous && elapsed < CARRY_OVER) {
+    const tail = posesForBeat(timeline, previous, previous.end);
+    const alpha = ease(elapsed / CARRY_OVER);
+    poses = {
+      a: blendPoseShortest(tail.a, poses.a, alpha),
+      b: blendPoseShortest(tail.b, poses.b, alpha),
+      aRest: tail.aRest + (poses.aRest - tail.aRest) * alpha,
+      bRest: tail.bRest + (poses.bRest - tail.bRest) * alpha,
+    };
+  }
 
-  const actorIsA = shared ? true : beat.actorId === timeline.fighterA;
-  const aPose = actorIsA ? actorPose : reactorPose;
-  const bPose = actorIsA ? reactorPose : actorPose;
+  const fatigue = fatigueForRound(beat.event.round);
+  const aPose = addLife(poses.a, {
+    time,
+    phase: LIFE_PHASE[0],
+    intensity: poses.aRest,
+    fatigue,
+    grounded: beat.grounded,
+  });
+  const bPose = addLife(poses.b, {
+    time,
+    phase: LIFE_PHASE[1],
+    intensity: poses.bRest,
+    fatigue,
+    grounded: beat.grounded,
+  });
+
+  const { x: cx, z: cz, half } = centreAt(timeline, beat, u);
 
   /**
    * On the canvas the fighters are not side by side, they are stacked. The poses each assume
@@ -236,6 +335,8 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
    * of a takedown or a ground strike is by definition the one on top — clear of the fighter
    * underneath. Without it two bodies occupy the same half-metre and read as one.
    */
+  const shared = beat.actorId === undefined;
+  const actorIsA = shared ? true : beat.actorId === timeline.fighterA;
   const lift = beat.grounded && !shared ? 0.22 : 0;
   const aLift = actorIsA ? lift : 0;
   const bLift = actorIsA ? 0 : lift;
@@ -263,8 +364,16 @@ function reactionPose(beat: TimelineBeat, time: number): ResolvedPose {
   if (time < beat.impactAt) return rest;
 
   const into = time - beat.impactAt;
-  if (into >= beat.reaction.duration) return rest;
-  const reacting = sampleClip(beat.reaction, into / beat.reaction.duration);
-  // The reaction is authored from a standing stance; on the ground the rest pose dominates.
-  return beat.grounded ? blendPose(rest, reacting, 0.35) : reacting;
+  const duration = beat.reaction.duration;
+  if (into >= duration) return rest;
+
+  const reacting = sampleClip(beat.reaction, into / duration);
+  // On the ground the rest pose dominates, because a reaction authored standing means little
+  // once the fighter is underneath someone.
+  const target = beat.grounded ? blendPose(rest, reacting, 0.35) : reacting;
+
+  // Ease the reaction on from wherever the body was, and off again if it outlives the beat.
+  const takeover = Math.min(1, into / REACTION_TAKEOVER);
+  const release = Math.min(1, (duration - into) / REACTION_RELEASE);
+  return blendPoseShortest(rest, target, ease(Math.min(takeover, release)));
 }

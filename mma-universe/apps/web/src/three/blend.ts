@@ -40,6 +40,44 @@ function lerp3(a: Vec3, b: Vec3, alpha: number): Vec3 {
   ];
 }
 
+/**
+ * The signed difference between two angles, wrapped into (-pi, pi].
+ *
+ * Exported because it is also the only correct way to *measure* rotation: two euler angles a
+ * full turn apart describe the same orientation, so their numeric difference says nothing
+ * about how far anything moved. Tests that assert on motion use this rather than subtraction.
+ */
+export function angularDelta(from: number, to: number): number {
+  let delta = (to - from) % (Math.PI * 2);
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta <= -Math.PI) delta += Math.PI * 2;
+  return delta;
+}
+
+/**
+ * Blends by the shortest rotation on every axis.
+ *
+ * Within a clip the author chose the path — a wheel kick deliberately travels past 2*pi — so
+ * ordinary `blendPose` interpolates the numbers as written. Across a beat boundary there is no
+ * intended path at all, and interpolating the numbers unwinds a whole turn in a sixth of a
+ * second: the fighter finishes a spinning kick and then visibly spins back. Here the two
+ * angles are treated as orientations, which is what they are.
+ */
+export function blendPoseShortest(a: ResolvedPose, b: ResolvedPose, alpha: number): ResolvedPose {
+  if (alpha <= 0) return a;
+  const joints = {} as Record<Joint, Vec3>;
+  for (const joint of JOINT_NAMES) {
+    const from = a.joints[joint];
+    const to = b.joints[joint];
+    joints[joint] = [
+      from[0] + angularDelta(from[0], to[0]) * alpha,
+      from[1] + angularDelta(from[1], to[1]) * alpha,
+      from[2] + angularDelta(from[2], to[2]) * alpha,
+    ];
+  }
+  return { joints, offset: lerp3(a.offset, b.offset, alpha) };
+}
+
 export function blendPose(a: ResolvedPose, b: ResolvedPose, alpha: number): ResolvedPose {
   if (alpha <= 0) return a;
   if (alpha >= 1) return b;
@@ -50,10 +88,52 @@ export function blendPose(a: ResolvedPose, b: ResolvedPose, alpha: number): Reso
   return { joints, offset: lerp3(a.offset, b.offset, alpha) };
 }
 
-/** Smoothstep. Keyframe times carry the intent; this only takes the corners off. */
-export function ease(x: number): number {
+/**
+ * Easing curves, one per kind of motion.
+ *
+ * A single curve for everything is most of what makes an animation read as robotic: a jab
+ * and a stagger accelerate identically, so nothing has weight. These four describe the four
+ * things a body actually does — wind up, fire, absorb, settle — and a keyframe names the one
+ * that carries it.
+ */
+export type Ease = 'linear' | 'smooth' | 'anticipate' | 'snap' | 'settle';
+
+const CURVES: Record<Ease, (t: number) => number> = {
+  /** No shaping. For a hold, or a segment whose keyframes already carry the timing. */
+  linear: (t) => t,
+  /** Smoothstep: the neutral default, corners taken off both ends. */
+  smooth: (t) => t * t * (3 - 2 * t),
+  /** Slow to leave, gathering speed — a wind-up, a level change, a hip loading. */
+  anticipate: (t) => t * t * (2 - t * 0.35),
+  /**
+   * Explosive, then decelerating hard into the target — a limb thrown and then caught by
+   * its own joints. Skewing a smoothstep early keeps the peak inside what an arm can do
+   * (about 30 rad/s) instead of the infinite jerk an easeOut leaves at the start.
+   */
+  snap: (t) => Math.pow(t * t * (3 - 2 * t), 0.6),
+  /** Quick to move, long to arrive — recovering to guard, a body coming to rest. */
+  settle: (t) => 1 - Math.pow(1 - t, 2.2),
+};
+
+export function applyEase(kind: Ease, x: number): number {
   const t = x <= 0 ? 0 : x >= 1 ? 1 : x;
-  return t * t * (3 - 2 * t);
+  return (CURVES[kind] ?? CURVES.smooth)(t);
+}
+
+/** Smoothstep, kept as the default for callers that do not care which curve they get. */
+export function ease(x: number): number {
+  return applyEase('smooth', x);
+}
+
+/**
+ * Pushes a pose past its target.
+ *
+ * A punch that stops dead at full extension looks like a robot arm reaching a set point. A
+ * little overshoot past the impact pose, then a recoil back, is what reads as mass being
+ * thrown and then caught.
+ */
+export function extrapolate(from: ResolvedPose, to: ResolvedPose, factor: number): ResolvedPose {
+  return blendPose(from, to, factor);
 }
 
 /**
@@ -74,7 +154,9 @@ export function sampleClip(clip: Clip, u: number): ResolvedPose {
     if (!next || !previous) continue;
     if (u <= next.t) {
       const span = next.t - previous.t;
-      const alpha = span <= 0 ? 1 : ease((u - previous.t) / span);
+      // A keyframe's ease describes the segment arriving at it, so the curve belongs to the
+      // motion that ends there rather than to the one that leaves.
+      const alpha = span <= 0 ? 1 : applyEase(next.ease ?? 'smooth', (u - previous.t) / span);
       return blendPose(resolvePose(previous.pose), resolvePose(next.pose), alpha);
     }
   }

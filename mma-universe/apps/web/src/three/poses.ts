@@ -31,6 +31,41 @@ export function derive(base: Pose, joints: Partial<Record<Joint, Vec3>>, offset?
   };
 }
 
+/**
+ * Blends two poses at the data level, so a clip can be authored in terms of the poses it
+ * already has. A factor past 1 extrapolates, which is how a strike overshoots its own target
+ * instead of stopping dead on it.
+ *
+ * A joint missing from either side counts as zero, which is exactly what `resolvePose` does,
+ * so this agrees with sampling.
+ */
+export function mix(a: Pose, b: Pose, factor: number): Pose {
+  const joints: Partial<Record<Joint, Vec3>> = {};
+  const names = new Set<Joint>([
+    ...(Object.keys(a.joints) as Joint[]),
+    ...(Object.keys(b.joints) as Joint[]),
+  ]);
+  for (const joint of names) {
+    const from = a.joints[joint] ?? ([0, 0, 0] as Vec3);
+    const to = b.joints[joint] ?? ([0, 0, 0] as Vec3);
+    joints[joint] = [
+      from[0] + (to[0] - from[0]) * factor,
+      from[1] + (to[1] - from[1]) * factor,
+      from[2] + (to[2] - from[2]) * factor,
+    ];
+  }
+  const offA = a.offset ?? ([0, 0, 0] as Vec3);
+  const offB = b.offset ?? ([0, 0, 0] as Vec3);
+  return {
+    joints,
+    offset: [
+      offA[0] + (offB[0] - offA[0]) * factor,
+      offA[1] + (offB[1] - offA[1]) * factor,
+      offA[2] + (offB[2] - offA[2]) * factor,
+    ],
+  };
+}
+
 /** The rest pose: every joint at zero. Any joint no pose mentions resolves here. */
 export const NEUTRAL: Pose = { joints: {}, offset: [0, 0, 0] };
 

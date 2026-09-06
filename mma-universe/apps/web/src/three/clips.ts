@@ -19,6 +19,7 @@
  */
 
 import type { HitReaction, FightPositionWire } from '../types.ts';
+import type { Ease } from './blend.ts';
 import type { Pose } from './poses.ts';
 import * as P from './poses.ts';
 
@@ -26,6 +27,8 @@ export interface Keyframe {
   /** Normalised time within the clip, 0 to 1. */
   readonly t: number;
   readonly pose: Pose;
+  /** The curve of the segment *arriving* at this keyframe. Defaults to smoothstep. */
+  readonly ease?: Ease;
 }
 
 export interface Clip {
@@ -43,29 +46,42 @@ function clip(duration: number, impactAt: number, keys: readonly Keyframe[]): Cl
   return { duration, impactAt, keys, variants: 1 };
 }
 
-function k(t: number, pose: Pose): Keyframe {
-  return { t, pose };
+function k(t: number, pose: Pose, ease?: Ease): Keyframe {
+  return ease ? { t, pose, ease } : { t, pose };
 }
 
 /**
- * The shape almost every strike shares: settle, load, fire, recover. Authoring it once means
- * the individual techniques differ only in the two poses that make them that technique.
+ * The shape almost every strike shares.
+ *
+ * The first pass was settle, load, fire, *hold*, recover — and that hold was a freeze-frame at
+ * full extension on the end of every punch, which is most of what made the whole thing read as
+ * a puppet. A thrown limb does four things instead: it winds up slowly, fires ballistically,
+ * carries slightly past the target, and is then caught and brought back. The overshoot is
+ * small — eight percent past the impact pose — but it is the difference between mass being
+ * thrown and an arm reaching a set point.
  */
 function strike(load: Pose, impact: Pose, duration: number, from: Pose = P.STANCE): Clip {
-  return clip(duration, 0.52, [
+  return clip(duration, 0.45, [
     k(0, from),
-    k(0.3, load),
-    k(0.52, impact),
-    k(0.64, impact),
-    k(1, from),
+    k(0.2, load, 'anticipate'),
+    k(0.45, impact, 'snap'),
+    k(0.53, P.mix(load, impact, 1.08), 'linear'),
+    k(0.74, P.mix(from, impact, 0.22), 'settle'),
+    k(1, from, 'settle'),
   ]);
 }
 
-/** A grappling sequence: a slower arc through an intermediate position into a hold. */
+/**
+ * A grappling sequence: a slower arc through an intermediate position into a hold.
+ *
+ * Grappling is not ballistic — it is a level change that gathers speed, a drive that arrives
+ * hard, and then weight settling into position — so the curves differ from a strike's.
+ */
 function grapple(duration: number, stages: readonly Pose[], from: Pose = P.STANCE): Clip {
   const keys: Keyframe[] = [k(0, from)];
+  const curves: Ease[] = ['anticipate', 'snap', 'settle'];
   stages.forEach((pose, index) => {
-    keys.push(k((index + 1) / stages.length, pose));
+    keys.push(k((index + 1) / stages.length, pose, curves[Math.min(index, curves.length - 1)]));
   });
   return clip(duration, 0.72, keys);
 }
@@ -82,27 +98,27 @@ const STRIKES: Record<string, Clip> = {
   strike_elbow: strike(P.CLINCH, P.ELBOW, 0.48, P.CLINCH),
   strike_knee: strike(P.CLINCH, P.KNEE, 0.54, P.CLINCH),
 
-  strike_superman: clip(0.72, 0.55, [
+  strike_superman: clip(0.72, 0.52, [
     k(0, P.STANCE),
-    k(0.22, P.CROUCH),
-    k(0.55, P.SUPERMAN),
-    k(0.68, P.SUPERMAN),
-    k(1, P.STANCE),
+    k(0.22, P.CROUCH, 'anticipate'),
+    k(0.52, P.SUPERMAN, 'snap'),
+    k(0.6, P.mix(P.CROUCH, P.SUPERMAN, 1.06), 'linear'),
+    k(1, P.STANCE, 'settle'),
   ]),
-  strike_backfist: clip(0.62, 0.6, [
+  strike_backfist: clip(0.62, 0.58, [
     k(0, P.STANCE),
-    k(0.34, P.SPIN_CHAMBER),
-    k(0.6, P.BACKFIST),
-    k(0.7, P.BACKFIST),
-    k(1, P.STANCE),
+    k(0.34, P.SPIN_CHAMBER, 'anticipate'),
+    k(0.58, P.BACKFIST, 'snap'),
+    k(0.66, P.mix(P.SPIN_CHAMBER, P.BACKFIST, 1.07), 'linear'),
+    k(1, P.STANCE, 'settle'),
   ]),
-  strike_flying_knee: clip(0.82, 0.5, [
+  strike_flying_knee: clip(0.82, 0.48, [
     k(0, P.STANCE),
-    k(0.2, P.CROUCH),
-    k(0.5, P.FLYING_KNEE),
-    k(0.66, P.FLYING_KNEE),
-    k(0.86, P.CROUCH),
-    k(1, P.STANCE),
+    k(0.2, P.CROUCH, 'anticipate'),
+    k(0.48, P.FLYING_KNEE, 'snap'),
+    k(0.58, P.mix(P.CROUCH, P.FLYING_KNEE, 1.05), 'linear'),
+    k(0.86, P.CROUCH, 'settle'),
+    k(1, P.STANCE, 'settle'),
   ]),
 
   kick_low: strike(P.LOADED, P.KICK_LOW, 0.52),
@@ -113,22 +129,22 @@ const STRIKES: Record<string, Clip> = {
   // Spins carry more keyframes than anything else, because the hips travel further than a
   // single interpolation step may cover: euler lerp takes the short way round, so a half turn
   // per keyframe is the ceiling.
-  kick_spinning_back: clip(0.88, 0.66, [
+  kick_spinning_back: clip(0.88, 0.64, [
     k(0, P.STANCE),
-    k(0.24, P.spinTo(P.SPIN_CHAMBER, 1.1)),
-    k(0.46, P.SPIN_CHAMBER),
-    k(0.66, P.SPIN_BACK_KICK),
-    k(0.78, P.SPIN_BACK_KICK),
-    k(1, P.SPIN_RECOVER),
+    k(0.24, P.spinTo(P.SPIN_CHAMBER, 1.1), 'anticipate'),
+    k(0.46, P.SPIN_CHAMBER, 'linear'),
+    k(0.64, P.SPIN_BACK_KICK, 'snap'),
+    k(0.72, P.mix(P.SPIN_CHAMBER, P.SPIN_BACK_KICK, 1.06), 'linear'),
+    k(1, P.SPIN_RECOVER, 'settle'),
   ]),
-  kick_wheel: clip(0.96, 0.7, [
+  kick_wheel: clip(0.96, 0.68, [
     k(0, P.STANCE),
-    k(0.2, P.spinTo(P.SPIN_CHAMBER, 1.1)),
-    k(0.38, P.SPIN_CHAMBER),
-    k(0.54, P.spinTo(P.WHEEL_KICK, P.WHEEL_KICK_YAW - 2.1)),
-    k(0.7, P.WHEEL_KICK),
-    k(0.8, P.WHEEL_KICK),
-    k(1, P.SPIN_RECOVER),
+    k(0.2, P.spinTo(P.SPIN_CHAMBER, 1.1), 'anticipate'),
+    k(0.38, P.SPIN_CHAMBER, 'linear'),
+    k(0.54, P.spinTo(P.WHEEL_KICK, P.WHEEL_KICK_YAW - 2.1), 'linear'),
+    k(0.68, P.WHEEL_KICK, 'snap'),
+    k(0.77, P.spinTo(P.WHEEL_KICK, P.WHEEL_KICK_YAW + 0.22), 'linear'),
+    k(1, P.SPIN_RECOVER, 'settle'),
   ]),
 
   ground_punch: strike(P.MOUNT_TOP, P.GROUND_STRIKE_DOWN, 0.4, P.MOUNT_TOP),
@@ -215,14 +231,19 @@ const BEATS: Record<string, Clip> = {
     k(0.62, P.TURTLE),
     k(1, P.SCRAMBLE_UP),
   ]),
-  knockdown: clip(1.15, 0.3, [
+  knockdown: clip(1.15, 0.28, [
     k(0, P.STANCE),
-    k(0.16, P.HIT_HEAVY),
-    k(0.42, P.STAGGER),
-    k(0.72, P.DOWNED),
-    k(1, P.DOWNED),
+    k(0.14, P.HIT_HEAVY, 'snap'),
+    k(0.42, P.STAGGER, 'settle'),
+    k(0.72, P.DOWNED, 'anticipate'),
+    k(1, P.DOWNED, 'settle'),
   ]),
-  stun_wobble: clip(1.0, 0.4, [k(0, P.STANCE), k(0.3, P.HIT_HEAVY), k(0.62, P.WOBBLE), k(1, P.WOBBLE)]),
+  stun_wobble: clip(1.0, 0.36, [
+    k(0, P.STANCE),
+    k(0.26, P.HIT_HEAVY, 'snap'),
+    k(0.62, P.WOBBLE, 'settle'),
+    k(1, P.WOBBLE, 'smooth'),
+  ]),
   reaction_cut: clip(0.9, 0.35, [k(0, P.STANCE), k(0.3, P.HIT_LIGHT), k(0.6, P.CUT_CHECK), k(1, P.STANCE)]),
 
   stance_idle: clip(2.2, 0.5, [
@@ -276,13 +297,49 @@ export const IDLE_CLIP = CLIPS.stance_idle as Clip;
  */
 export const REACTIONS: Readonly<Record<HitReaction, Clip>> = {
   NONE: clip(0.3, 0, [k(0, P.STANCE), k(1, P.STANCE)]),
-  LIGHT: clip(0.42, 0, [k(0, P.STANCE), k(0.3, P.HIT_LIGHT), k(1, P.STANCE)]),
-  HEAVY: clip(0.7, 0, [k(0, P.STANCE), k(0.26, P.HIT_HEAVY), k(0.6, P.WOBBLE), k(1, P.STANCE)]),
-  STAGGER: clip(1.1, 0, [k(0, P.STANCE), k(0.22, P.HIT_HEAVY), k(0.5, P.STAGGER), k(0.8, P.WOBBLE), k(1, P.WOBBLE)]),
-  DROP: clip(1.2, 0, [k(0, P.STANCE), k(0.18, P.HIT_HEAVY), k(0.44, P.STAGGER), k(0.76, P.DOWNED), k(1, P.DOWNED)]),
-  BLOCK: clip(0.42, 0, [k(0, P.STANCE), k(0.28, P.BLOCK_HIGH), k(0.55, P.BLOCK_HIGH), k(1, P.STANCE)]),
-  SLIP: clip(0.5, 0, [k(0, P.STANCE), k(0.32, P.SLIP), k(1, P.STANCE)]),
-  SPRAWL_DEFEND: clip(0.8, 0, [k(0, P.STANCE), k(0.26, P.CROUCH), k(0.55, P.SPRAWL), k(1, P.STANCE)]),
+  LIGHT: clip(0.42, 0, [
+    k(0, P.STANCE),
+    k(0.22, P.HIT_LIGHT, 'snap'),
+    k(1, P.STANCE, 'settle'),
+  ]),
+  HEAVY: clip(0.72, 0, [
+    k(0, P.STANCE),
+    k(0.18, P.mix(P.STANCE, P.HIT_HEAVY, 1.12), 'snap'),
+    k(0.42, P.HIT_HEAVY, 'linear'),
+    k(0.68, P.WOBBLE, 'settle'),
+    k(1, P.STANCE, 'settle'),
+  ]),
+  STAGGER: clip(1.1, 0, [
+    k(0, P.STANCE),
+    k(0.15, P.mix(P.STANCE, P.HIT_HEAVY, 1.15), 'snap'),
+    k(0.42, P.STAGGER, 'settle'),
+    k(0.76, P.WOBBLE, 'smooth'),
+    k(1, P.WOBBLE, 'settle'),
+  ]),
+  DROP: clip(1.25, 0, [
+    k(0, P.STANCE),
+    k(0.13, P.mix(P.STANCE, P.HIT_HEAVY, 1.18), 'snap'),
+    k(0.4, P.STAGGER, 'settle'),
+    k(0.72, P.DOWNED, 'anticipate'),
+    k(1, P.DOWNED, 'settle'),
+  ]),
+  BLOCK: clip(0.44, 0, [
+    k(0, P.STANCE),
+    k(0.2, P.BLOCK_HIGH, 'snap'),
+    k(0.5, P.BLOCK_HIGH, 'linear'),
+    k(1, P.STANCE, 'settle'),
+  ]),
+  SLIP: clip(0.5, 0, [
+    k(0, P.STANCE),
+    k(0.26, P.SLIP, 'snap'),
+    k(1, P.STANCE, 'settle'),
+  ]),
+  SPRAWL_DEFEND: clip(0.8, 0, [
+    k(0, P.STANCE),
+    k(0.22, P.CROUCH, 'anticipate'),
+    k(0.5, P.SPRAWL, 'snap'),
+    k(1, P.STANCE, 'settle'),
+  ]),
 };
 
 /* -------------------------------------------------------------------- stances */

@@ -172,6 +172,20 @@ export class FightViewer {
     }
     this.desiredTarget.set(centreX, preset.lookHeight, centreZ);
 
+    /**
+     * A little handheld float.
+     *
+     * A camera on a perfect spline reads as CAD, not as coverage — the eye notices the absence
+     * of an operator. Three incommensurate low frequencies at a few centimetres are enough to
+     * suggest one, and because they are a function of the timeline clock rather than of a
+     * random source, a paused frame is stable and a replay is identical.
+     */
+    const float = time;
+    this.desiredPosition.x += Math.sin(float * 0.53) * 0.035 + Math.sin(float * 1.31) * 0.012;
+    this.desiredPosition.y += Math.sin(float * 0.71 + 1.4) * 0.022;
+    this.desiredPosition.z += Math.sin(float * 0.43 + 2.6) * 0.03;
+    this.desiredTarget.y += Math.sin(float * 0.61 + 0.8) * 0.012;
+
     if (snapCamera) {
       this.camera.position.copy(this.desiredPosition);
       this.cameraTarget.copy(this.desiredTarget);

@@ -25,8 +25,9 @@ import {
 import { CLIPS, REACTIONS, applyVariant, isGrounded, resolveClip, restPose } from '../src/three/clips.ts';
 import { CAMERA_PRESETS } from '../src/three/camera.ts';
 import { JOINT_NAMES, JOINT_ORDER, SKELETON, type Joint } from '../src/three/rig.ts';
-import { resolvePose, sampleClip } from '../src/three/blend.ts';
+import { angularDelta, resolvePose, sampleClip, type ResolvedPose } from '../src/three/blend.ts';
 import { buildTimeline, sampleFrame } from '../src/three/player.ts';
+import { MAX_JOINT_OFFSET, addLife, fatigueForRound } from '../src/three/life.ts';
 import type { AnimationBeatWire, AnimationDirective, FightEventWire, HitReaction } from '../src/types.ts';
 
 const A = 'fighter_00001';
@@ -250,13 +251,17 @@ describe('Sprint 19 — a exchange, driven only by the event stream', () => {
     expect(cameras[0]).toBe('BROADCAST');
   });
 
-  it('holds the defender still until the glove arrives, then reacts', () => {
+  it('does not react before the glove arrives, and clearly does after', () => {
     const cross = timeline.beats[2]!;
-    const before = sampleFrame(timeline, cross.start + 0.01);
-    const after = sampleFrame(timeline, cross.impactAt + 0.12);
-    // Fighter B is the defender on beat 3; their head only moves once the shot lands.
-    expect(before.b.pose.joints.neck).toEqual(restPose('STANDING', 'REACTOR').joints.neck);
-    expect(after.b.pose.joints.neck).not.toEqual(before.b.pose.joints.neck);
+    const rest = resolvePose(restPose('STANDING', 'REACTOR')).joints.neck[0]!;
+    const before = sampleFrame(timeline, cross.start + 0.01).b.pose.joints.neck[0]!;
+    const after = sampleFrame(timeline, cross.impactAt + 0.12).b.pose.joints.neck[0]!;
+
+    // The defender is never perfectly still — they are breathing — so "no reaction yet" is
+    // bounded by the idle layer's own ceiling rather than by exact equality.
+    expect(Math.abs(before - rest)).toBeLessThanOrEqual(MAX_JOINT_OFFSET);
+    // Once it lands the head snaps well past anything breathing could account for.
+    expect(Math.abs(after - rest)).toBeGreaterThan(MAX_JOINT_OFFSET * 2);
   });
 
   it('separates the fighters by a striking range and faces them at each other', () => {
@@ -364,5 +369,191 @@ describe('Sprint 19 — the skeleton is drawable', () => {
     const leg = SKELETON.thighL.length + SKELETON.shinL.length;
     expect(hip - leg).toBeGreaterThan(0);
     expect(hip - leg).toBeLessThan(0.1);
+  });
+});
+
+describe('Sprint 19 — the motion is continuous, not stepped', () => {
+  const universe2 = generateUniverse({ seed: 'motion-tests' });
+  const a = universe2.state.fighters[4]!;
+  const b = universe2.state.fighters[5]!;
+  const result = simulateFight(a, b, { fightId: 'motion_test', rounds: 3 }, Rng.fromSeed('motion_test'));
+  const timeline = buildTimeline(toBeats(result.events), a.id, b.id);
+
+  const FRAME = 1 / 60;
+
+  /**
+   * The headline guard against the puppet look.
+   *
+   * Every beat used to begin from its clip's opening stance, so the body snapped back to
+   * neutral between every action — a few hundred discontinuities a fight. A teleport shows up
+   * here as a single frame moving a joint further than any real motion could.
+   */
+  it('never jumps a joint further in one frame than a body could move', () => {
+    // Radians per 1/60 s. A jab extends the elbow through about 120 degrees in 60 ms — some
+    // 35 rad/s — so the bound has to allow a genuinely fast limb. It sits at 48 rad/s, well
+    // clear of real motion and well below the resets and full-turn unwinds it exists to catch,
+    // which ran from 1.2 to 6.4 radians in a single frame.
+    const CEILING = 0.8;
+    let worst = 0;
+    let worstAt = 0;
+    let previous = sampleFrame(timeline, 0);
+
+    for (let time = FRAME; time < timeline.duration; time += FRAME) {
+      const frame = sampleFrame(timeline, time);
+      for (const [now, before] of [
+        [frame.a, previous.a],
+        [frame.b, previous.b],
+      ] as const) {
+        for (const joint of JOINT_NAMES) {
+          for (let axis = 0; axis < 3; axis++) {
+            const delta = Math.abs(angularDelta(before.pose.joints[joint][axis]!, now.pose.joints[joint][axis]!));
+            if (delta > worst) {
+              worst = delta;
+              worstAt = time;
+            }
+          }
+        }
+      }
+      previous = frame;
+    }
+    expect(worst, `largest single-frame jump was at t=${worstAt.toFixed(2)}s`).toBeLessThan(CEILING);
+  });
+
+  it('never lets a fighter stand perfectly still', () => {
+    // Sampled across the whole fight, including the gaps between beats where the old
+    // renderer froze both fighters into statues.
+    for (let time = 0; time < timeline.duration - 1; time += 0.9) {
+      const first = sampleFrame(timeline, time);
+      const second = sampleFrame(timeline, time + 0.5);
+      for (const side of ['a', 'b'] as const) {
+        let moved = 0;
+        for (const joint of JOINT_NAMES) {
+          for (let axis = 0; axis < 3; axis++) {
+            moved += Math.abs(angularDelta(first[side].pose.joints[joint][axis]!, second[side].pose.joints[joint][axis]!));
+          }
+        }
+        expect(moved, `${side} frozen at t=${time.toFixed(1)}s`).toBeGreaterThan(0.004);
+      }
+    }
+  });
+
+  it('moves the fighters around the cage at a walking pace, not by teleporting', () => {
+    let worst = 0;
+    let previous = sampleFrame(timeline, 0);
+    for (let time = FRAME; time < timeline.duration; time += FRAME) {
+      const frame = sampleFrame(timeline, time);
+      const travel = Math.hypot(
+        frame.a.position[0] - previous.a.position[0],
+        frame.a.position[2] - previous.a.position[2],
+      );
+      worst = Math.max(worst, travel / FRAME);
+      previous = frame;
+    }
+    expect(worst, 'metres per second').toBeLessThan(4);
+  });
+
+  it('throws a strike ballistically: the fire is faster than the wind-up', () => {
+    const clip = CLIPS.strike_cross!;
+    const speedAt = (u: number) => {
+      const from = sampleClip(clip, u - 0.01);
+      const to = sampleClip(clip, u + 0.01);
+      let total = 0;
+      for (const joint of JOINT_NAMES) {
+        for (let axis = 0; axis < 3; axis++) {
+          total += Math.abs(to.joints[joint][axis]! - from.joints[joint][axis]!);
+        }
+      }
+      return total;
+    };
+    const peakOver = (from: number, to: number) => {
+      let peak = 0;
+      for (let u = from; u <= to; u += 0.01) peak = Math.max(peak, speedAt(u));
+      return peak;
+    };
+    // The wind-up gathers, the throw is explosive, and the arm is then decelerated into full
+    // extension by its own joints — so the peak of the strike segment is what carries weight,
+    // not its final instant.
+    const windUp = peakOver(0.02, 0.18);
+    const throwPeak = peakOver(0.21, clip.impactAt);
+    expect(windUp).toBeGreaterThan(0);
+    expect(throwPeak).toBeGreaterThan(windUp * 1.8);
+  });
+
+  it('carries the body from one beat into the next instead of resetting it', () => {
+    /**
+     * States the property directly rather than by proxy: just after a boundary the body should
+     * still be near where the previous beat left it, and *not* near the incoming clip's cold
+     * opening pose. A renderer that resets would land on the opening frame exactly.
+     */
+    const spread = (x: ResolvedPose, y: ResolvedPose) => {
+      let total = 0;
+      for (const joint of JOINT_NAMES) {
+        for (let axis = 0; axis < 3; axis++) {
+          total += Math.abs(angularDelta(x.joints[joint][axis]!, y.joints[joint][axis]!));
+        }
+      }
+      return total;
+    };
+
+    let checked = 0;
+    for (const beat of timeline.beats.slice(1)) {
+      const before = sampleFrame(timeline, beat.start - 0.008).a.pose;
+      const after = sampleFrame(timeline, beat.start + 0.008).a.pose;
+      const coldOpening = sampleClip(beat.clip, 0);
+
+      // Only meaningful where the incoming clip actually starts somewhere else.
+      if (spread(before, coldOpening) < 0.5) continue;
+      checked++;
+      expect(spread(after, before), `beat ${beat.index} jumped away from where the body was`)
+        .toBeLessThan(spread(after, coldOpening));
+    }
+    // Most beats both end and begin near a stance, so only the boundaries into a genuinely
+    // different opening — a sprawl, a ground position, a spin — exercise the carry-over.
+    expect(checked, 'no boundaries were worth checking').toBeGreaterThan(2);
+  });
+});
+
+describe('Sprint 19 — the idle layer stays an idle layer', () => {
+  const rest = resolvePose(restPose('STANDING', 'ACTOR'));
+  const options = { time: 12.5, phase: 0, intensity: 1, fatigue: 0.3, grounded: false };
+
+  it('never moves a joint further than its documented ceiling', () => {
+    for (let time = 0; time < 40; time += 0.13) {
+      const lived = addLife(rest, { ...options, time });
+      for (const joint of JOINT_NAMES) {
+        for (let axis = 0; axis < 3; axis++) {
+          const delta = Math.abs(lived.joints[joint][axis]! - rest.joints[joint][axis]!);
+          expect(delta, `${joint} axis ${axis} at t=${time.toFixed(2)}`).toBeLessThanOrEqual(MAX_JOINT_OFFSET + 1e-9);
+        }
+      }
+    }
+  });
+
+  it('is a pure function of time, so a replay is identical', () => {
+    expect(addLife(rest, options)).toEqual(addLife(rest, options));
+    expect(addLife(rest, { ...options, time: 12.6 })).not.toEqual(addLife(rest, options));
+  });
+
+  it('keeps the two fighters out of lockstep', () => {
+    const first = addLife(rest, { ...options, phase: 0 });
+    const second = addLife(rest, { ...options, phase: 3.71 });
+    expect(first.joints.spine).not.toEqual(second.joints.spine);
+  });
+
+  it('does nothing at all when the intensity is zero', () => {
+    expect(addLife(rest, { ...options, intensity: 0 })).toBe(rest);
+  });
+
+  it('tires the fighter as the rounds pass', () => {
+    expect(fatigueForRound(1)).toBe(0);
+    expect(fatigueForRound(5)).toBeGreaterThan(fatigueForRound(3));
+    expect(fatigueForRound(5)).toBeLessThanOrEqual(1);
+  });
+
+  it('drops the guard when the fighter is tired', () => {
+    const fresh = addLife(rest, { ...options, fatigue: 0, time: 5 });
+    const spent = addLife(rest, { ...options, fatigue: 1, time: 5 });
+    // A positive rotation on a DOWN limb lets it hang, so a tired guard sits lower.
+    expect(spent.joints.armL[0]!).toBeGreaterThan(fresh.joints.armL[0]!);
   });
 });
