@@ -20,7 +20,7 @@ import { navigate } from '../router.ts';
 import { buildTimeline, type Frame, type Pacing, type Timeline } from '../three/player.ts';
 import { createViewer, type FightViewer } from '../three/viewer.ts';
 import { PALETTE_A, PALETTE_B } from '../three/skeleton.ts';
-import type { AnimationBeatWire, FightDetail, FightSummary } from '../types.ts';
+import type { AnimationStreamWire, FightDetail, FightSummary } from '../types.ts';
 
 const RATES = [0.25, 0.5, 1, 2, 4];
 
@@ -210,7 +210,7 @@ export function FightViewer3D({ id }: { id?: string }) {
   const activeId = selected ?? id ?? list.data?.[0]?.id;
   const fight = useApi<FightDetail>(activeId ? `/fights/${activeId}` : undefined);
 
-  const [beats, setBeats] = useState<AnimationBeatWire[]>();
+  const [stream, setStream] = useState<AnimationStreamWire>();
   const [pacing, setPacing] = useState<Pacing>('CONDENSED');
   const [loadError, setLoadError] = useState<string>();
 
@@ -221,11 +221,11 @@ export function FightViewer3D({ id }: { id?: string }) {
   useEffect(() => {
     if (!activeId) return;
     let cancelled = false;
-    setBeats(undefined);
+    setStream(undefined);
     setLoadError(undefined);
-    apiGet<AnimationBeatWire[]>(`/fights/${activeId}/events?format=animation`)
+    apiGet<AnimationStreamWire>(`/fights/${activeId}/events?format=animation`)
       .then((data) => {
-        if (!cancelled) setBeats(data);
+        if (!cancelled) setStream(data);
       })
       .catch((cause: unknown) => {
         if (!cancelled) setLoadError(cause instanceof Error ? cause.message : String(cause));
@@ -236,9 +236,11 @@ export function FightViewer3D({ id }: { id?: string }) {
   }, [activeId]);
 
   const timeline = useMemo(() => {
-    if (!beats || !fight.data) return undefined;
-    return buildTimeline(beats, fight.data.fighterAId, fight.data.fighterBId, pacing);
-  }, [beats, fight.data, pacing]);
+    if (!stream || !fight.data) return undefined;
+    const profiles =
+      stream.profiles.length === 2 ? ([stream.profiles[0]!, stream.profiles[1]!] as const) : undefined;
+    return buildTimeline(stream.beats, fight.data.fighterAId, fight.data.fighterBId, pacing, profiles);
+  }, [stream, fight.data, pacing]);
 
   if (list.error) return <ErrorNote message={list.error} />;
 

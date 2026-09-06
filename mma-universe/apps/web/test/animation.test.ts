@@ -72,7 +72,7 @@ function strikeEvent(sequence: number, overrides: Partial<StrikeEvent> = {}): St
     target: 'HEAD',
     result: 'LANDED',
     position: 'STANDING',
-    damage: 4,
+    damage: 1.4,
     staminaCost: 2,
     description: 'A jab.',
     ...overrides,
@@ -223,9 +223,9 @@ describe('Sprint 19 — a exchange, driven only by the event stream', () => {
    * and the timeline turns those into frames.
    */
   const events: FightEvent[] = [
-    strikeEvent(1, { technique: 'JAB', result: 'LANDED', damage: 4, description: 'Jab lands.' }),
+    strikeEvent(1, { technique: 'JAB', result: 'LANDED', damage: 1.4, description: 'Jab lands.' }),
     strikeEvent(2, { technique: 'LEFT_HOOK', result: 'BLOCKED', damage: 0, attacker: B, defender: A, description: 'Hook blocked.' }),
-    strikeEvent(3, { technique: 'RIGHT_CROSS', result: 'LANDED', damage: 9, description: 'Cross lands clean.' }),
+    strikeEvent(3, { technique: 'RIGHT_CROSS', result: 'LANDED', damage: 2.4, description: 'Cross lands clean.' }),
     strikeEvent(4, { technique: 'JAB', result: 'MISSED', damage: 0, attacker: B, defender: A, description: 'Jab misses.' }),
     {
       schemaVersion: FIGHT_EVENT_SCHEMA_VERSION,

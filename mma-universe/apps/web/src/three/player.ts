@@ -25,9 +25,10 @@ import type { Clip } from './clips.ts';
 import { REACTIONS, isGrounded, resolveClip, restPose } from './clips.ts';
 import type { ResolvedPose } from './blend.ts';
 import { blendPose, blendPoseShortest, ease, resolvePose, sampleClip } from './blend.ts';
-import { addLife, fatigueForRound } from './life.ts';
+import { addLife, fatigueForRound, feintAt, staggerAt } from './life.ts';
 import { claimOf, isTotal, JOINT_REGION, FULL_MASK, REGIONS, type Region, type RegionMask } from './regions.ts';
 import { planFootwork, footAt, type FootPlan, type PathSample } from './footwork.ts';
+import type { MovementProfile } from '../types.ts';
 import { solveLeg, rotateY as rotateGround, eulerToMatrix, transposeApply, subtract } from './ik.ts';
 import { JOINT_NAMES, SKELETON, type Joint, type Vec3 } from './rig.ts';
 
@@ -62,8 +63,6 @@ const COMBO_GAP = 0.02;
 const COMBO_WINDOW = 0.9;
 /** How fast the two of them circle, in radians per beat of engagement. */
 const CIRCLE_RATE = 0.085;
-/** Phase offsets for the idle layer, so the two fighters are never breathing in lockstep. */
-const LIFE_PHASE = [0, 3.71] as const;
 /**
  * How long a reaction takes to take over the defender's body, and to hand it back.
  *
@@ -90,6 +89,8 @@ export interface TimelineBeat {
   /** Absolute time the reaction fires; the defender does nothing before it. */
   readonly impactAt: number;
   readonly reaction: Clip;
+  /** The reaction's name, for the condition it leaves behind and for debug readouts. */
+  readonly reactionName: string;
   /** Undefined when the beat belongs to nobody in particular, and both fighters play it. */
   readonly actorId?: string;
   readonly reactorId?: string;
@@ -116,7 +117,39 @@ export interface Timeline {
   readonly pacing: Pacing;
   /** Where each fighter's feet are, planned once so that sampling stays pure. */
   readonly footPlans: readonly [FootPlan, FootPlan];
+  /** How each fighter moves. Defaults to an unremarkable middle if none was supplied. */
+  readonly profiles: readonly [MovementProfile, MovementProfile];
+  /** When each fighter was badly hurt, so the effect can decay rather than end with the clip. */
+  readonly staggerHits: readonly [readonly StaggerHit[], readonly StaggerHit[]];
 }
+
+export interface StaggerHit {
+  readonly at: number;
+  readonly magnitude: number;
+}
+
+/** A fighter we know nothing about: neither a pressure fighter nor an out-fighter. */
+function defaultProfile(fighterId: string, index: number): MovementProfile {
+  return {
+    fighterId,
+    pressure: 0.5,
+    mobility: 0.5,
+    recovery: 0.5,
+    engine: 0.5,
+    guard: 0.5,
+    deception: 0.5,
+    phase: index * Math.PI,
+  };
+}
+
+/** How badly a reaction says the fighter was hurt, for the condition that follows it. */
+const STAGGER_WEIGHT: Readonly<Record<string, number>> = {
+  DROP: 1,
+  STAGGER: 0.8,
+  HEAVY: 0.45,
+  BODY_FOLD: 0.4,
+  LEG_BUCKLE: 0.3,
+};
 
 /**
  * Centre-to-centre separation each position is drawn at.
@@ -180,6 +213,7 @@ export function buildTimeline(
   fighterA: string,
   fighterB: string,
   pacing: Pacing = 'CONDENSED',
+  profiles?: readonly [MovementProfile, MovementProfile],
 ): Timeline {
   const ordered = [...source].sort((x, y) => x.event.sequence - y.event.sequence);
   const beats: TimelineBeat[] = [];
@@ -223,6 +257,7 @@ export function buildTimeline(
       spacing: spacingFor(position),
       impactAt: start + duration * clip.impactAt,
       reaction: REACTIONS[directive.reaction] ?? REACTIONS.NONE,
+      reactionName: directive.reaction,
       actorId: directive.actorId,
       reactorId: directive.reactorId,
       centre: centreFor(event),
@@ -234,6 +269,21 @@ export function buildTimeline(
     cursor = start + duration;
   }
 
+  const resolved: readonly [MovementProfile, MovementProfile] = profiles ?? [
+    defaultProfile(fighterA, 0),
+    defaultProfile(fighterB, 1),
+  ];
+
+  // Being hurt outlives the clip that did it, so the moments are collected here and the
+  // condition decays from them — see `staggerAt`.
+  const hits: [StaggerHit[], StaggerHit[]] = [[], []];
+  for (const beat of beats) {
+    const magnitude = STAGGER_WEIGHT[beat.reactionName];
+    if (magnitude === undefined || beat.reactorId === undefined) continue;
+    const index = beat.reactorId === fighterA ? 0 : 1;
+    hits[index].push({ at: beat.impactAt, magnitude });
+  }
+
   const partial: Timeline = {
     beats,
     duration: cursor + TAIL,
@@ -241,12 +291,20 @@ export function buildTimeline(
     fighterB,
     pacing,
     footPlans: [{ steps: [], start: [[0, 0], [0, 0]] }, { steps: [], start: [[0, 0], [0, 0]] }],
+    profiles: resolved,
+    staggerHits: hits,
   };
 
   // The gait is planned against the finished path, then attached — see `footwork.ts` for why
   // it is planned rather than simulated frame by frame.
   const path = samplePath(partial);
-  return { ...partial, footPlans: [planFootwork(path[0], 0), planFootwork(path[1], 0.5)] };
+  return {
+    ...partial,
+    footPlans: [
+      planFootwork(path[0], { phase: 0, mobility: resolved[0].mobility, pressure: resolved[0].pressure }),
+      planFootwork(path[1], { phase: 0.5, mobility: resolved[1].mobility, pressure: resolved[1].pressure }),
+    ],
+  };
 }
 
 /** Samples where each fighter stands, at a fixed rate, for the footwork planner. */
@@ -281,6 +339,12 @@ export interface FighterFrame {
   readonly legFreedom: number;
   /** How much of the idle layer applied: 1 at rest, lower mid-technique. */
   readonly rest: number;
+  /** How hurt this fighter still looks, decaying from the last time they were caught. */
+  readonly stagger: number;
+  /** Whether a feint is in progress, and how far through it. */
+  readonly feint: number;
+  /** How tired this fighter should look, given the round and their engine. */
+  readonly fatigue: number;
 }
 
 export interface Frame {
@@ -577,8 +641,8 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
   if (!beat) {
     return {
       time,
-      a: { id: timeline.fighterA, pose: IDLE, position: [0, 0, -0.81], yaw: 0, legFreedom: 1, rest: 1 },
-      b: { id: timeline.fighterB, pose: IDLE, position: [0, 0, 0.81], yaw: Math.PI, legFreedom: 1, rest: 1 },
+      a: { id: timeline.fighterA, pose: IDLE, position: [0, 0, -0.81], yaw: 0, legFreedom: 1, rest: 1, stagger: 0, feint: 0, fatigue: 0 },
+      b: { id: timeline.fighterB, pose: IDLE, position: [0, 0, 0.81], yaw: Math.PI, legFreedom: 1, rest: 1, stagger: 0, feint: 0, fatigue: 0 },
       camera: 'WIDE',
       description: '',
       round: 1,
@@ -608,7 +672,6 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
     };
   }
 
-  const fatigue = fatigueForRound(beat.event.round);
   const stance = stanceAt(timeline, beat, u);
 
   const sides = [
@@ -616,15 +679,33 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
     { pose: poses.b, rest: poses.bRest, legs: poses.bLegs, root: stance.b, yaw: stance.yawB, plan: timeline.footPlans[1] },
   ] as const;
 
+  const conditions = sides.map((side, index) => {
+    const profile = timeline.profiles[index]!;
+    // A fighter with an engine is barely into their work when one without is emptying out.
+    const fatigue = fatigueForRound(beat.event.round, profile.engine);
+    // Being hurt decays rather than ending with the clip, and composure shortens it.
+    const stagger = beat.grounded
+      ? 0
+      : staggerAt(timeline.staggerHits[index]!, time) * (1 - profile.recovery * 0.45);
+    // Feints only happen in the gaps, and only from someone inclined to throw them.
+    const feint = beat.grounded ? 0 : feintAt(profile.deception, profile.phase, time) * side.rest;
+    return { profile, fatigue, stagger, feint };
+  });
+
   const finished = sides.map((side, index) => {
+    const state = conditions[index]!;
     let pose = addLife(side.pose, {
       time,
-      phase: LIFE_PHASE[index] ?? 0,
+      phase: state.profile.phase,
       intensity: side.rest,
-      fatigue,
+      fatigue: state.fatigue,
       grounded: beat.grounded,
+      guard: state.profile.guard,
+      verve: state.profile.mobility,
+      stagger: state.stagger,
+      feint: state.feint,
     });
-    pose = trackOpponent(pose, beat.grounded ? 0 : 0.55 * side.rest);
+    pose = trackOpponent(pose, beat.grounded ? 0 : 0.55 * side.rest * (1 - state.stagger * 0.6));
     if (!beat.grounded) {
       pose = plantFeet(pose, side.root, side.yaw, side.plan, time, side.legs);
     }
@@ -651,6 +732,9 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
       yaw: stance.yawA,
       legFreedom: poses.aLegs,
       rest: poses.aRest,
+      stagger: conditions[0]!.stagger,
+      feint: conditions[0]!.feint,
+      fatigue: conditions[0]!.fatigue,
     },
     b: {
       id: timeline.fighterB,
@@ -659,6 +743,9 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
       yaw: stance.yawB,
       legFreedom: poses.bLegs,
       rest: poses.bRest,
+      stagger: conditions[1]!.stagger,
+      feint: conditions[1]!.feint,
+      fatigue: conditions[1]!.fatigue,
     },
     camera: beat.camera,
     description: beat.event.description,

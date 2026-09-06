@@ -304,7 +304,27 @@ export type HitReaction =
   | 'DROP'
   | 'BLOCK'
   | 'SLIP'
-  | 'SPRAWL_DEFEND';
+  | 'SPRAWL_DEFEND'
+  | 'BODY_FOLD'
+  | 'LEG_BUCKLE';
+
+/**
+ * How one fighter moves, projected from the simulation for the renderer's use.
+ *
+ * Mirrors `@mma/sim`'s `viz/movement-profile.ts`. Deliberately traits rather than attributes:
+ * the renderer is told how much someone presses forward, never what their aggression rating
+ * is, so the attribute model stays private to the simulation.
+ */
+export interface MovementProfile {
+  fighterId: string;
+  pressure: number;
+  mobility: number;
+  recovery: number;
+  engine: number;
+  guard: number;
+  deception: number;
+  phase: number;
+}
 
 export interface AnimationDirective {
   clip: string;
@@ -318,8 +338,15 @@ export interface AnimationDirective {
   reactorId?: string;
 }
 
-/** One entry of `/fights/:id/events?format=animation`. */
+/** One entry of the directive stream. */
 export interface AnimationBeatWire {
   event: FightEventWire;
   directive: AnimationDirective;
+}
+
+/** The whole response from `/fights/:id/events?format=animation`. */
+export interface AnimationStreamWire {
+  schemaVersion: number;
+  profiles: MovementProfile[];
+  beats: AnimationBeatWire[];
 }

@@ -60,6 +60,7 @@ export * from './fight/engine.ts';
 
 // 3D visualisation abstraction
 export * from './viz/animation-map.ts';
+export * from './viz/movement-profile.ts';
 
 // Universe
 export * from './universe/universe.ts';

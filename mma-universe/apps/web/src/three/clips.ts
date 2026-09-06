@@ -334,6 +334,21 @@ export const REACTIONS: Readonly<Record<HitReaction, Clip>> = {
     k(0.26, P.SLIP, 'snap'),
     k(1, P.STANCE, 'settle'),
   ]),
+  // Where a strike lands changes what the body does, not just how much of it moves.
+  BODY_FOLD: clip(0.85, 0, [
+    k(0, P.STANCE),
+    k(0.16, P.mix(P.STANCE, P.BODY_FOLD, 1.1), 'snap'),
+    k(0.44, P.BODY_FOLD, 'linear'),
+    k(0.78, P.mix(P.STANCE, P.BODY_FOLD, 0.4), 'settle'),
+    k(1, P.STANCE, 'settle'),
+  ]),
+  LEG_BUCKLE: clip(0.72, 0, [
+    k(0, P.STANCE),
+    k(0.14, P.mix(P.STANCE, P.LEG_BUCKLE, 1.12), 'snap'),
+    k(0.4, P.LEG_BUCKLE, 'linear'),
+    k(0.74, P.mix(P.STANCE, P.LEG_BUCKLE, 0.35), 'settle'),
+    k(1, P.STANCE, 'settle'),
+  ]),
   SPRAWL_DEFEND: clip(0.8, 0, [
     k(0, P.STANCE),
     k(0.22, P.CROUCH, 'anticipate'),

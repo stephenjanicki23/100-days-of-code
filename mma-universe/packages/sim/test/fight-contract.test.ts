@@ -108,8 +108,11 @@ describe('3D animation mapping (brief §16, §17)', () => {
   });
 
   it('derives the hit reaction from what the event says happened', () => {
-    expect(mapEventToAnimation({ ...strike, damage: 12 }).reaction).toBe('HEAVY');
-    expect(mapEventToAnimation({ ...strike, damage: 4 }).reaction).toBe('LIGHT');
+    // Damage values are on the scale the fight engine actually emits — roughly 0.4 to 2.5 for
+    // a landed strike — not the larger numbers these fixtures once assumed.
+    expect(mapEventToAnimation({ ...strike, damage: 2.3 }).reaction).toBe('HEAVY');
+    expect(mapEventToAnimation({ ...strike, damage: 1.4 }).reaction).toBe('LIGHT');
+    expect(mapEventToAnimation({ ...strike, damage: 0.6 }).reaction).toBe('NONE');
     expect(mapEventToAnimation({ ...strike, result: 'BLOCKED' }).reaction).toBe('BLOCK');
     expect(mapEventToAnimation({ ...strike, result: 'MISSED' }).reaction).toBe('SLIP');
   });
@@ -122,8 +125,8 @@ describe('3D animation mapping (brief §16, §17)', () => {
   });
 
   it('queues a replay only for decisive moments', () => {
-    expect(mapEventToAnimation({ ...strike, damage: 14 }).triggersReplay).toBe(true);
-    expect(mapEventToAnimation({ ...strike, damage: 2 }).triggersReplay).toBe(false);
+    expect(mapEventToAnimation({ ...strike, damage: 2.4 }).triggersReplay).toBe(true);
+    expect(mapEventToAnimation({ ...strike, damage: 1.2 }).triggersReplay).toBe(false);
   });
 
   it('resolves the position implied by a grappling event', () => {

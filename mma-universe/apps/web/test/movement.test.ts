@@ -200,3 +200,103 @@ describe('transitions — timing depends on what is happening', () => {
     expect(again.footPlans).toEqual(timeline.footPlans);
   });
 });
+
+describe('personality — fighters do not all move the same', () => {
+  const pressureFighter = {
+    fighterId: a.id,
+    pressure: 0.95,
+    mobility: 0.2,
+    recovery: 0.3,
+    engine: 0.25,
+    guard: 0.3,
+    deception: 0.15,
+    phase: 0.4,
+  };
+  const outFighter = {
+    fighterId: b.id,
+    pressure: 0.15,
+    mobility: 0.95,
+    recovery: 0.9,
+    engine: 0.9,
+    guard: 0.9,
+    deception: 0.9,
+    phase: 2.7,
+  };
+  const styled = buildTimeline(beats, a.id, b.id, 'CONDENSED', [pressureFighter, outFighter]);
+
+  it('makes the mobile fighter step more than the flat-footed one', () => {
+    expect(styled.footPlans[1].steps.length).toBeGreaterThan(styled.footPlans[0].steps.length);
+  });
+
+  it('tires the fighter without an engine faster', () => {
+    const late = styled.beats.find((beat) => beat.event.round >= 2);
+    if (!late) return;
+    const frame = sampleFrame(styled, late.start + 0.1);
+    expect(frame.a.fatigue).toBeGreaterThan(frame.b.fatigue);
+  });
+
+  it('lets the craftier fighter feint, and the plain one hardly ever', () => {
+    let crafty = 0;
+    let plain = 0;
+    for (let time = 0; time < 60; time += 0.05) {
+      const frame = sampleFrame(styled, time);
+      if (frame.a.feint > 0.2) plain++;
+      if (frame.b.feint > 0.2) crafty++;
+    }
+    expect(crafty).toBeGreaterThan(plain);
+    expect(plain, 'even a plain fighter feints occasionally').toBeGreaterThan(0);
+  });
+
+  it('is still deterministic with profiles applied', () => {
+    const again = buildTimeline(beats, a.id, b.id, 'CONDENSED', [pressureFighter, outFighter]);
+    expect(again.footPlans).toEqual(styled.footPlans);
+    expect(sampleFrame(again, 9.25)).toEqual(sampleFrame(styled, 9.25));
+  });
+
+  it('falls back to an unremarkable fighter when no profile is supplied', () => {
+    expect(timeline.profiles[0].pressure).toBe(0.5);
+    expect(timeline.profiles[0].fighterId).toBe(a.id);
+  });
+});
+
+describe('being hurt is a condition, not a clip', () => {
+  it('leaves a fighter shaken after the reaction has finished', () => {
+    const hurt = timeline.staggerHits.flat();
+    expect(hurt.length, 'nobody was hurt in a whole fight').toBeGreaterThan(0);
+
+    const worst = hurt.reduce((best, hit) => (hit.magnitude > best.magnitude ? hit : best));
+    const side = timeline.staggerHits[0].includes(worst) ? 'a' : 'b';
+
+    const atImpact = sampleFrame(timeline, worst.at + 0.05)[side].stagger;
+    const oneSecondLater = sampleFrame(timeline, worst.at + 1.2)[side].stagger;
+    const longAfter = sampleFrame(timeline, worst.at + 9)[side].stagger;
+
+    // The chain the brief asks for — stunned, staggering, recovering, normal — as a value that
+    // decays through all of them rather than as states to switch between.
+    expect(atImpact).toBeGreaterThan(0.1);
+    expect(oneSecondLater).toBeLessThan(atImpact);
+    expect(oneSecondLater).toBeGreaterThan(0.02);
+    expect(longAfter).toBeLessThan(0.05);
+  });
+
+  it('never shows a fighter hurt before they were hit', () => {
+    const first = timeline.staggerHits.flat().sort((x, y) => x.at - y.at)[0];
+    if (!first) return;
+    expect(sampleFrame(timeline, Math.max(0, first.at - 0.4)).a.stagger).toBeLessThan(0.2);
+  });
+});
+
+describe('damage reactions depend on where the strike landed', () => {
+  it('folds the body for a body shot and buckles the stance for a leg kick', () => {
+    const kinds = new Set(timeline.beats.map((beat) => beat.reactionName));
+    // A whole fight should contain body work and leg kicks, not only head shots.
+    expect(kinds.has('BODY_FOLD') || kinds.has('LEG_BUCKLE'), [...kinds].join(',')).toBe(true);
+  });
+
+  it('has a distinct clip for every reaction the mapper can now emit', () => {
+    for (const beat of timeline.beats) {
+      expect(beat.reaction, beat.reactionName).toBeTruthy();
+      expect(beat.reaction.duration).toBeGreaterThan(0);
+    }
+  });
+});

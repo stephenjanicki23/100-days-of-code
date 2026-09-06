@@ -73,8 +73,9 @@ function rotate(offset: Ground, yaw: number): Ground {
   return [offset[0] * c + offset[1] * s, -offset[0] * s + offset[1] * c];
 }
 
-function wanted(sample: PathSample, foot: 0 | 1): Ground {
-  const offset = rotate(STANCE_OFFSET[foot]!, sample.yaw);
+function wanted(sample: PathSample, foot: 0 | 1, lean = 0): Ground {
+  const base = STANCE_OFFSET[foot]!;
+  const offset = rotate([base[0], base[1] + lean], sample.yaw);
   return [sample.x + offset[0], sample.z + offset[1]];
 }
 
@@ -89,13 +90,30 @@ function distance(a: Ground, b: Ground): number {
  * that has just landed waits before moving again. Those two rules are most of what separates
  * walking from skating.
  */
-export function planFootwork(path: readonly PathSample[], phase = 0): FootPlan {
+export interface GaitOptions {
+  /** Per-fighter offset so the two of them do not reset their stances in unison. */
+  readonly phase?: number;
+  /** 0 to 1. A mobile fighter steps sooner and resets more often. */
+  readonly mobility?: number;
+  /** 0 to 1. Pressure carries the stance forward over the lead foot. */
+  readonly pressure?: number;
+}
+
+export function planFootwork(path: readonly PathSample[], options: GaitOptions = {}): FootPlan {
+  const phase = options.phase ?? 0;
+  const mobility = Math.max(0, Math.min(1, options.mobility ?? 0.5));
+  const pressure = Math.max(0, Math.min(1, options.pressure ?? 0.5));
+  // A light-footed fighter tolerates less drift before resetting, and resets more often when
+  // nothing is happening; a flat-footed one plants and stays.
+  const trigger = STEP_TRIGGER * (1.35 - mobility * 0.7);
+  const idleAdjust = IDLE_ADJUST * (1.5 - mobility * 0.9);
+  const lean = (pressure - 0.5) * 0.06;
   const first = path[0];
   if (!first) return { steps: [], start: [[0, 0], [0, 0]] };
 
-  const start: [Ground, Ground] = [wanted(first, 0), wanted(first, 1)];
+  const start: [Ground, Ground] = [wanted(first, 0, lean), wanted(first, 1, lean)];
   const current: [Ground, Ground] = [start[0], start[1]];
-  const lastStepEnd: [number, number] = [first.time - IDLE_ADJUST * phase, first.time - IDLE_ADJUST * (1 - phase)];
+  const lastStepEnd: [number, number] = [first.time - idleAdjust * phase, first.time - idleAdjust * (1 - phase)];
   const steps: FootStep[] = [];
   let busyUntil = -Infinity;
 
@@ -104,18 +122,18 @@ export function planFootwork(path: readonly PathSample[], phase = 0): FootPlan {
     if (sample.time < busyUntil) continue;
 
     for (const foot of [0, 1] as const) {
-      const target = wanted(sample, foot);
+      const target = wanted(sample, foot, lean);
       const drift = distance(current[foot], target);
-      const idle = sample.time - lastStepEnd[foot] > IDLE_ADJUST;
+      const idle = sample.time - lastStepEnd[foot] > idleAdjust;
       // A step is worth taking if the stance has pulled the foot out of place, or simply
       // because it has been planted long enough that a real fighter would have reset it.
-      if (drift < STEP_TRIGGER && !(idle && drift > 0.02)) continue;
+      if (drift < trigger && !(idle && drift > 0.02)) continue;
       if (sample.time - lastStepEnd[foot] < STEP_COOLDOWN) continue;
 
       // Land where the stance will want the foot when the step finishes, not where it wants
       // it now — otherwise every step lands behind the body and the fighter never catches up.
       const arrival = path.find((entry) => entry.time >= sample.time + STEP_TIME) ?? sample;
-      const to = wanted(arrival, foot);
+      const to = wanted(arrival, foot, lean);
       steps.push({ foot, lift: sample.time, plant: sample.time + STEP_TIME, from: current[foot]!, to });
       current[foot] = to;
       lastStepEnd[foot] = sample.time + STEP_TIME;

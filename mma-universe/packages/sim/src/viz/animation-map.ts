@@ -36,7 +36,25 @@ export type CameraHint =
   | 'CORNER';
 
 /** The reaction played on the receiving fighter. */
-export type HitReaction = 'NONE' | 'LIGHT' | 'HEAVY' | 'STAGGER' | 'DROP' | 'BLOCK' | 'SLIP' | 'SPRAWL_DEFEND';
+/**
+ * How the fighter on the receiving end reacts.
+ *
+ * `BODY_FOLD` and `LEG_BUCKLE` were added once it became clear that every landed strike was
+ * producing the same head snap regardless of where it hit: a hook to the liver and a low kick
+ * to the thigh are not the same event to watch. Consumers tolerate unknown values by contract,
+ * so an older renderer simply falls back rather than breaking.
+ */
+export type HitReaction =
+  | 'NONE'
+  | 'LIGHT'
+  | 'HEAVY'
+  | 'STAGGER'
+  | 'DROP'
+  | 'BLOCK'
+  | 'SLIP'
+  | 'SPRAWL_DEFEND'
+  | 'BODY_FOLD'
+  | 'LEG_BUCKLE';
 
 export interface AnimationDirective {
   /** Prebuilt clip identifier the engine has authored. Never generated at runtime. */
@@ -162,6 +180,23 @@ function resolveTargetState(event: FightEvent): FightPosition {
   return event.position;
 }
 
+/**
+ * Damage thresholds for reactions, calibrated to the scale the engine actually emits.
+ *
+ * These were originally 3 and 8, which look like sensible numbers and are not: a landed strike
+ * carries roughly 0.4 to 2.5 damage, so *every cleanly landed strike returned `NONE`* and the
+ * fighters visibly took nothing all fight. It went unnoticed because there is no error — just
+ * an absence — and because `PARTIAL` results kept producing `LIGHT`, so reactions never
+ * disappeared entirely.
+ *
+ * `reaction-calibration.test.ts` now asserts the spread against a real fight, so the day the
+ * engine's damage scale moves, this fails loudly instead of quietly going numb again.
+ */
+const LIGHT_DAMAGE = 1.1;
+const HEAVY_DAMAGE = 2.05;
+const FOLD_DAMAGE = 1.55;
+const BUCKLE_DAMAGE = 1.2;
+
 /** How the defender reacts, derived from the event's own result and severity. */
 function resolveReaction(event: FightEvent): HitReaction {
   if (event.eventType === 'KNOCKDOWN') return 'DROP';
@@ -170,7 +205,11 @@ function resolveReaction(event: FightEvent): HitReaction {
   if (isStrikeEvent(event)) {
     switch (event.result) {
       case 'LANDED':
-        return event.damage >= 8 ? 'HEAVY' : event.damage >= 3 ? 'LIGHT' : 'NONE';
+        // Where it landed matters as much as how hard. A body shot folds the torso and a leg
+        // kick buckles the stance; neither looks anything like a head snapping back.
+        if (event.target === 'BODY') return event.damage >= FOLD_DAMAGE ? 'BODY_FOLD' : 'LIGHT';
+        if (event.target === 'LEG') return event.damage >= BUCKLE_DAMAGE ? 'LEG_BUCKLE' : 'LIGHT';
+        return event.damage >= HEAVY_DAMAGE ? 'HEAVY' : event.damage >= LIGHT_DAMAGE ? 'LIGHT' : 'NONE';
       case 'PARTIAL':
         return 'LIGHT';
       case 'BLOCKED':
@@ -220,7 +259,12 @@ export function mapEventToAnimation(event: FightEvent): AnimationDirective {
   const decisive =
     event.eventType === 'KNOCKDOWN' ||
     event.eventType === 'FIGHT_END' ||
-    (isStrikeEvent(event) && event.eventType === 'SIGNIFICANT_STRIKE' && event.result === 'LANDED' && event.damage >= 9);
+    (isStrikeEvent(event) &&
+      event.eventType === 'SIGNIFICANT_STRIKE' &&
+      event.result === 'LANDED' &&
+      // Same miscalibration as the reaction thresholds: this read `>= 9` against a scale that
+      // tops out near 2.5, so the impact camera and the replay trigger never once fired.
+      event.damage >= HEAVY_DAMAGE);
 
   const actorId = 'attacker' in event ? event.attacker : 'fighterId' in event ? event.fighterId : undefined;
   const reactorId = 'defender' in event ? event.defender : undefined;

@@ -29,6 +29,8 @@ import {
   simulateFight,
   FIGHT_EVENT_JSON_SCHEMA,
   animationRegistry,
+  movementProfile,
+  FIGHT_EVENT_SCHEMA_VERSION,
   requiredClips,
   hottestStorylines,
   type Fight,
@@ -308,7 +310,23 @@ app.get<{ Params: { id: string }; Querystring: { format?: string } }>(
   async (request) => {
     const events = loadFightEvents(service.db, request.params.id);
     if (request.query.format === 'animation') {
-      return events.map((event) => ({ event, directive: mapEventToAnimation(event) }));
+      /**
+       * The renderer's view of a fight: the directive stream, plus how the two of them move.
+       *
+       * The profile block is separate from the events on purpose — how a fighter moves is a
+       * property of the person, not of a moment — and it is a projection rather than an
+       * attribute dump, so the renderer learns that someone presses forward without learning
+       * anything about the attribute model behind it.
+       */
+      const fight = service.universe.state.fights.find((entry) => entry.id === request.params.id);
+      const fighters = [fight?.fighterAId, fight?.fighterBId]
+        .map((id) => (id ? service.universe.fighter(id) : undefined))
+        .filter((fighter): fighter is NonNullable<typeof fighter> => fighter !== undefined);
+      return {
+        schemaVersion: FIGHT_EVENT_SCHEMA_VERSION,
+        profiles: fighters.map((fighter) => movementProfile(fighter, request.params.id)),
+        beats: events.map((event) => ({ event, directive: mapEventToAnimation(event) })),
+      };
     }
     return events;
   },

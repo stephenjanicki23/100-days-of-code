@@ -12,7 +12,15 @@
  */
 
 import { writeFileSync } from 'node:fs';
-import { Rng, currentAbility, displayName, generateUniverse, mapEventToAnimation, simulateFight } from '@mma/sim';
+import {
+  Rng,
+  currentAbility,
+  displayName,
+  generateUniverse,
+  mapEventToAnimation,
+  movementProfile,
+  simulateFight,
+} from '@mma/sim';
 import type { Fighter, FightResult } from '@mma/sim';
 
 import { JOINT_ORDER, SKELETON } from '../apps/web/src/three/rig.ts';
@@ -51,7 +59,8 @@ const beats: AnimationBeatWire[] = result.events.map((event) => ({
   event: event as never,
   directive: mapEventToAnimation(event) as never,
 }));
-const timeline = buildTimeline(beats, a.id, b.id);
+const profiles = [movementProfile(a, result.fightId), movementProfile(b, result.fightId)] as const;
+const timeline = buildTimeline(beats, a.id, b.id, 'CONDENSED', profiles);
 
 function meshesFor(palette: FighterPalette) {
   const parts: { material: string; data: ReturnType<typeof buildSkin> }[] = [

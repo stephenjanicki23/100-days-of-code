@@ -10,7 +10,7 @@
 import { buildTimeline, sampleFrame, type Frame, type Pacing, type Timeline } from '../three/player.ts';
 import { createViewer, type FightViewer } from '../three/viewer.ts';
 import { PALETTE_A, PALETTE_B } from '../three/skeleton.ts';
-import type { AnimationBeatWire } from '../types.ts';
+import type { AnimationBeatWire, MovementProfile } from '../types.ts';
 
 interface PackedBeat {
   s: number; t: number; r: number; c: string; d: string; k: string;
@@ -27,6 +27,7 @@ interface PackedFight {
   id: string; headline: string; rounds: number; outcome: string; technique?: string;
   finishRound?: number; finishTime?: string; winnerId?: string;
   a: PackedFighter; b: PackedFighter; beats: PackedBeat[];
+  profiles?: MovementProfile[];
 }
 
 declare global {
@@ -124,11 +125,15 @@ function renderDebug(frame: Frame): void {
     ['camera', frame.camera.toLowerCase()],
     ['position', beat.position.toLowerCase()],
     ['claim', `legs ${beat.claim.LEGS.toFixed(2)}  spine ${beat.claim.SPINE.toFixed(2)}  armR ${beat.claim.ARM_R.toFixed(2)}`],
+    ['reaction', beat.reactionName.toLowerCase().replace(/_/g, ' ')],
     ['blend', `${(transition * 100).toFixed(0)}%  over ${beat.blend.toFixed(2)}s${beat.follows ? '  (combination)' : ''}`],
     ['legs free', `A ${frame.a.legFreedom.toFixed(2)}   B ${frame.b.legFreedom.toFixed(2)}`],
     ['idle', `A ${frame.a.rest.toFixed(2)}   B ${frame.b.rest.toFixed(2)}`],
+    ['hurt', `A ${frame.a.stagger.toFixed(2)}   B ${frame.b.stagger.toFixed(2)}`],
+    ['feint', `A ${frame.a.feint.toFixed(2)}   B ${frame.b.feint.toFixed(2)}`],
+    ['tired', `A ${frame.a.fatigue.toFixed(2)}   B ${frame.b.fatigue.toFixed(2)}`],
     ['facing', `${(beat.facing % (Math.PI * 2)).toFixed(2)} rad`],
-    ['round', `${beat.event.round}  (fatigue ${(Math.min(1, (beat.event.round - 1) / 4.5)).toFixed(2)})`],
+    ['round', String(beat.event.round)],
   ];
   debugPanel.innerHTML = rows
     .map(([key, value]) => `<span class="dbg-k">${key}</span><span class="dbg-v">${value}</span>`)
@@ -230,7 +235,11 @@ function load(index: number): void {
     button.setAttribute('aria-selected', String(on));
   });
 
-  timeline = buildTimeline(inflate(fight.beats), fight.a.id, fight.b.id, pacing);
+  const profiles =
+    fight.profiles && fight.profiles.length === 2
+      ? ([fight.profiles[0]!, fight.profiles[1]!] as const)
+      : undefined;
+  timeline = buildTimeline(inflate(fight.beats), fight.a.id, fight.b.id, pacing, profiles);
   hudA.textContent = fight.a.name;
   hudB.textContent = fight.b.name;
   scrub.max = String(timeline.duration);

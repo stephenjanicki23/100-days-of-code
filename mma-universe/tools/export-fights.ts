@@ -18,6 +18,7 @@ import {
   generateUniverse,
   mapEventToAnimation,
   recordString,
+  movementProfile,
   simulateFight,
   type Fighter,
   type FightResult,
@@ -54,6 +55,8 @@ function pack(a: Fighter, b: Fighter, result: FightResult, headline: string) {
     winnerId: result.winnerId,
     a: describe(a),
     b: describe(b),
+    // How the two of them move, so the renderer does not animate every fighter identically.
+    profiles: [movementProfile(a, result.fightId), movementProfile(b, result.fightId)],
     beats: result.events.map((event) => {
       const d = mapEventToAnimation(event);
       const packed: Record<string, unknown> = {

@@ -396,6 +396,52 @@ export const STAGGER = derive(HIT_HEAVY, {
   shinR: [0.4, 0, 0],
 }, [0.18, -0.22, -0.3]);
 
+/**
+ * Folding over a body shot.
+ *
+ * Nothing about this belongs to the head: the torso closes, the elbows come down onto the
+ * ribs rather than up to the temple, the hips drop and the chin tucks. Reusing the head-snap
+ * reaction for a liver shot was the tell that reactions were being chosen by severity alone.
+ */
+export const BODY_FOLD = derive(STANCE, {
+  hips: [0.42, -0.3, 0],
+  spine: [0.44, 0.12, 0.06],
+  chest: [0.3, 0.1, 0.04],
+  neck: [0.36, 0, 0],
+  head: [0.16, 0.14, 0],
+  armL: [-0.34, 0.4, -0.5],
+  forearmL: [-2.5, 0, 0.5],
+  armR: [-0.28, -0.4, 0.52],
+  forearmR: [-2.5, 0, -0.5],
+  thighL: [-0.6, 0.06, 0.08],
+  shinL: [0.8, 0, 0],
+  thighR: [-0.2, -0.06, -0.08],
+  shinR: [0.7, 0, 0],
+}, [0, -0.22, -0.08]);
+
+/**
+ * The stance going out from under a leg kick.
+ *
+ * The struck leg gives, the weight dumps onto the other one, and the whole body dips and
+ * tilts. It is a lower-body event, so the guard barely moves — which is exactly what makes it
+ * read as a leg kick rather than as a punch.
+ */
+export const LEG_BUCKLE = derive(STANCE, {
+  hips: [0.06, -0.36, 0.26],
+  spine: [0.1, 0.12, -0.14],
+  chest: [0.04, 0.1, -0.08],
+  neck: [-0.02, 0, -0.08],
+  armL: [-0.66, 0.1, -0.24],
+  forearmL: [-2.2, 0, 0.22],
+  armR: [-0.5, -0.1, 0.3],
+  forearmR: [-2.3, 0, -0.28],
+  thighL: [-0.16, 0.06, 0.3],
+  shinL: [0.96, 0, 0],
+  footL: [-0.3, 0, 0],
+  thighR: [0.22, -0.06, -0.18],
+  shinR: [0.72, 0, 0],
+}, [0.1, -0.2, -0.04]);
+
 export const SPRAWL = derive(STANCE, {
   hips: [0.8, -0.2, 0],
   spine: [0.5, 0.1, 0],
