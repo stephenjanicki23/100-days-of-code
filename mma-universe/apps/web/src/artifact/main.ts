@@ -81,6 +81,8 @@ const timeLabel = $('time');
 const durLabel = $('dur');
 const btnPlay = $<HTMLButtonElement>('btn-play');
 const stream = $<HTMLUListElement>('stream');
+const debugPanel = $('debug');
+const debugToggle = $<HTMLInputElement>('debug-toggle');
 const tabs = $('tabs');
 const tape = $('tape');
 const verdict = $('verdict');
@@ -101,9 +103,42 @@ function titleCase(value: string): string {
   return value.replace(/_/g, ' ').toLowerCase();
 }
 
+/**
+ * The animation debug readout.
+ *
+ * Blender does no animation in this project — it is handed finished bone rotations — so there
+ * are no F-curves or motion paths to inspect there. Everything that decides how a fighter
+ * moves happens in the choreography layer, so this is where the state has to be legible: what
+ * the current beat claimed, how much of the legs the footwork got, how far through a
+ * transition the body is, and how tired it is meant to look.
+ */
+function renderDebug(frame: Frame): void {
+  if (!debugToggle.checked) return;
+  const beat = frame.beat;
+  if (!beat) return;
+  const into = frame.time - beat.start;
+  const transition = Math.min(1, into / beat.blend);
+  const rows: [string, string][] = [
+    ['beat', `${beat.index}  ${beat.event.eventType.toLowerCase()}`],
+    ['clip', `${beat.clipName}  v${beat.clip.variants > 1 ? '·' : ''}`],
+    ['camera', frame.camera.toLowerCase()],
+    ['position', beat.position.toLowerCase()],
+    ['claim', `legs ${beat.claim.LEGS.toFixed(2)}  spine ${beat.claim.SPINE.toFixed(2)}  armR ${beat.claim.ARM_R.toFixed(2)}`],
+    ['blend', `${(transition * 100).toFixed(0)}%  over ${beat.blend.toFixed(2)}s${beat.follows ? '  (combination)' : ''}`],
+    ['legs free', `A ${frame.a.legFreedom.toFixed(2)}   B ${frame.b.legFreedom.toFixed(2)}`],
+    ['idle', `A ${frame.a.rest.toFixed(2)}   B ${frame.b.rest.toFixed(2)}`],
+    ['facing', `${(beat.facing % (Math.PI * 2)).toFixed(2)} rad`],
+    ['round', `${beat.event.round}  (fatigue ${(Math.min(1, (beat.event.round - 1) / 4.5)).toFixed(2)})`],
+  ];
+  debugPanel.innerHTML = rows
+    .map(([key, value]) => `<span class="dbg-k">${key}</span><span class="dbg-v">${value}</span>`)
+    .join('');
+}
+
 function onFrame(frame: Frame): void {
   scrub.value = String(frame.time);
   timeLabel.textContent = clock(frame.time);
+  renderDebug(frame);
   const index = frame.beat?.index ?? -1;
   if (index === lastBeat) return;
 
@@ -259,6 +294,9 @@ function boot(): void {
   });
   $<HTMLSelectElement>('rate').addEventListener('change', (event) => {
     viewer?.setRate(Number((event.target as HTMLSelectElement).value));
+  });
+  debugToggle.addEventListener('change', () => {
+    debugPanel.hidden = !debugToggle.checked;
   });
   $<HTMLSelectElement>('pacing').addEventListener('change', (event) => {
     pacing = (event.target as HTMLSelectElement).value as Pacing;

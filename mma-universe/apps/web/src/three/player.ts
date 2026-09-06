@@ -81,6 +81,8 @@ export interface TimelineBeat {
   readonly end: number;
   readonly event: FightEventWire;
   readonly clip: Clip;
+  /** The clip's registry name, for debug readouts and for total-takeover checks. */
+  readonly clipName: string;
   readonly camera: CameraHint;
   readonly position: FightPositionWire;
   readonly grounded: boolean;
@@ -214,6 +216,7 @@ export function buildTimeline(
       end: start + duration,
       event,
       clip,
+      clipName: directive.clip,
       camera: isGrounded(position) && directive.camera === 'BROADCAST' ? 'GROUND_OVERHEAD' : directive.camera,
       position,
       grounded: isGrounded(position),
@@ -505,6 +508,10 @@ function plantFeet(
     hipsBase[2] + pose.offset[2],
   ];
   const hipsRotation = eulerToMatrix(pose.joints.hips);
+  // The knee should point along the fighter's forward, not the hip's. A bladed stance yaws
+  // the hips a third of a radian off the line of the body, and using the hip's own axis puts
+  // that much splay into both knees.
+  const pole = transposeApply(hipsRotation, [0, 0, 1]);
 
   for (const [index, bones] of FOOT_JOINTS.entries()) {
     const foot = footAt(plan, index as 0 | 1, time);
@@ -514,7 +521,7 @@ function plantFeet(
     const thighOffset = SKELETON[bones[0]].offset;
     const target = subtract(fromHips, thighOffset);
 
-    const solved = solveLeg(target, THIGH_LENGTH, SHIN_LENGTH);
+    const solved = solveLeg(target, THIGH_LENGTH, SHIN_LENGTH, pole);
     for (const [slot, bone] of [bones[0], bones[1]].entries()) {
       const current = joints[bone];
       const wanted = slot === 0 ? solved.thigh : solved.shin;
