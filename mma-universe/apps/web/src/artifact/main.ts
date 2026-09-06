@@ -133,6 +133,9 @@ function renderDebug(frame: Frame): void {
     ['feint', `A ${frame.a.feint.toFixed(2)}   B ${frame.b.feint.toFixed(2)}`],
     ['tired', `A ${frame.a.fatigue.toFixed(2)}   B ${frame.b.fatigue.toFixed(2)}`],
     ['facing', `${(beat.facing % (Math.PI * 2)).toFixed(2)} rad`],
+    ['cage', `${Math.hypot(beat.centre[0], beat.centre[2]).toFixed(2)}m from centre  ·  ${
+      beat.pinned === 0 ? 'A on the fence' : beat.pinned === 1 ? 'B on the fence' : 'open space'
+    }`],
     ['round', String(beat.event.round)],
   ];
   debugPanel.innerHTML = rows

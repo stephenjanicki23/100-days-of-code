@@ -38,6 +38,7 @@ import {
 } from './regions.ts';
 import { planFootwork, footAt, type FootPlan, type PathSample } from './footwork.ts';
 import type { MovementProfile } from '../types.ts';
+import { walkCage, CAGE_INNER } from './cage.ts';
 import { solveLeg, rotateY as rotateGround, eulerToMatrix, transposeApply, subtract } from './ik.ts';
 import { JOINT_NAMES, SKELETON, type Joint, type Vec3 } from './rig.ts';
 
@@ -70,8 +71,6 @@ const BLEND_GRAPPLE = 0.3;
 /** Strikes that flow out of the one before rather than starting again from guard. */
 const COMBO_GAP = 0.02;
 const COMBO_WINDOW = 0.9;
-/** How fast the two of them circle, in radians per beat of engagement. */
-const CIRCLE_RATE = 0.085;
 /**
  * How long a reaction takes to take over the defender's body, and to hand it back.
  *
@@ -110,6 +109,8 @@ export interface TimelineBeat {
    * fight, which is not something two people circling each other ever do.
    */
   readonly facing: number;
+  /** Who has their back to the fence on this beat: 0 for A, 1 for B, -1 for neither. */
+  readonly pinned: number;
   /** How long this beat takes to take the body over. */
   readonly blend: number;
   /** How strongly this beat's clip claims each part of the body. */
@@ -147,6 +148,7 @@ function defaultProfile(fighterId: string, index: number): MovementProfile {
     engine: 0.5,
     guard: 0.5,
     deception: 0.5,
+    reach: 0.5,
     phase: index * Math.PI,
   };
 }
@@ -184,24 +186,6 @@ function spacingFor(position: FightPositionWire): number {
   }
 }
 
-/**
- * Where in the cage this beat happens.
- *
- * Derived from the event's sequence number rather than from a random walk, for the same
- * reason the mapper derives clip variants that way: a replay has to land in the same place
- * twice. The cage is 4.1 m to the fence, so the engagement wanders within a 1.5 m disc.
- */
-function centreFor(event: FightEventWire): Vec3 {
-  const phase = (event.sequence * 0.137) % (Math.PI * 2);
-  const radius = 0.75 + 0.75 * Math.sin(event.sequence * 0.041);
-  return [Math.cos(phase) * radius, 0, Math.sin(phase) * radius * 0.6];
-}
-
-/** Which way round the pair are standing, drifting the way two fighters circle. */
-function facingFor(event: FightEventWire): number {
-  return event.sequence * CIRCLE_RATE + Math.sin(event.sequence * 0.031) * 0.5;
-}
-
 /** An emergency, a decision, or a commitment — each takes the body over at its own rate. */
 function blendFor(clipName: string, reaction: string, eventType: string): number {
   if (eventType === 'KNOCKDOWN' || eventType === 'STUN' || reaction === 'STAGGER' || reaction === 'DROP') {
@@ -224,6 +208,11 @@ export function buildTimeline(
   pacing: Pacing = 'CONDENSED',
   profiles?: readonly [MovementProfile, MovementProfile],
 ): Timeline {
+  const resolved: readonly [MovementProfile, MovementProfile] = profiles ?? [
+    defaultProfile(fighterA, 0),
+    defaultProfile(fighterB, 1),
+  ];
+
   const ordered = [...source].sort((x, y) => x.event.sequence - y.event.sequence);
   const beats: TimelineBeat[] = [];
   let cursor = 0;
@@ -269,8 +258,11 @@ export function buildTimeline(
       reactionName: directive.reaction,
       actorId: directive.actorId,
       reactorId: directive.reactorId,
-      centre: centreFor(event),
-      facing: facingFor(event),
+      // Filled in below: where the fight is happening is a contest between the two of them,
+      // so it cannot be known until every beat's separation is.
+      centre: [0, 0, 0],
+      facing: 0,
+      pinned: -1,
       blend: follows ? BLEND_EMERGENCY : blendFor(directive.clip, directive.reaction, event.eventType),
       claim: isTotal(directive.clip) ? FULL_MASK : claimOf(clip),
       follows,
@@ -278,10 +270,28 @@ export function buildTimeline(
     cursor = start + duration;
   }
 
-  const resolved: readonly [MovementProfile, MovementProfile] = profiles ?? [
-    defaultProfile(fighterA, 0),
-    defaultProfile(fighterB, 1),
-  ];
+  // Where in the octagon each beat happens, walked as a contest rather than sampled from a
+  // curve — see `cage.ts`.
+  const seats = walkCage(
+    beats.map((beat) => beat.spacing / 2),
+    {
+      pressure: [resolved[0].pressure, resolved[1].pressure],
+      reach: [resolved[0].reach, resolved[1].reach],
+      mobility: [resolved[0].mobility, resolved[1].mobility],
+      phase: [resolved[0].phase, resolved[1].phase],
+    },
+  );
+  const placed = beats.map((beat, index) => {
+    const seat = seats[index]!;
+    return {
+      ...beat,
+      centre: [seat.centre[0], 0, seat.centre[1]] as Vec3,
+      facing: seat.facing,
+      pinned: seat.pinned,
+    };
+  });
+  beats.length = 0;
+  beats.push(...placed);
 
   // Being hurt outlives the clip that did it, so the moments are collected here and the
   // condition decays from them — see `staggerAt`.

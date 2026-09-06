@@ -16,6 +16,7 @@
 
 import type { AttributeSet } from '../domain/attributes.ts';
 import type { Fighter } from '../domain/fighter.ts';
+import { deriveStyle } from '../domain/archetypes.ts';
 
 export interface MovementProfile {
   readonly fighterId: string;
@@ -31,6 +32,20 @@ export interface MovementProfile {
   readonly guard: number;
   /** How often they sell something they are not actually throwing. */
   readonly deception: number;
+  /**
+   * Where they want the fight to happen: 0 is inside the pocket, 1 is at the end of a long
+   * guard. This is the difference between a brawler who plants in the middle and dares you to
+   * trade, and a karate fighter who lives on the outside and will not be pinned to the fence.
+   *
+   * Taken from the style the simulation already derives, rather than invented for the
+   * renderer: the fight engine consumes the same tendency when it decides what to throw.
+   */
+  readonly reach: number;
+  /**
+   * How hard they push the fight forward, blending the temperament in their attributes with
+   * the habits of their style. A pressure boxer and a counter striker with identical
+   * aggression ratings should still walk each other down very differently.
+   */
   /**
    * A per-fighter, per-fight phase offset, so no two fighters move on the same clock and the
    * same fighter does not move identically in every fight. Derived, never rolled: the same
@@ -72,13 +87,18 @@ function phaseOf(text: string): number {
  */
 export function movementProfile(fighter: Fighter, fightId: string): MovementProfile {
   const a = fighter.attributes;
+  const style = deriveStyle(fighter.attributes).tendencies;
+  const temperament = mix(a, [
+    ['aggression', 0.6],
+    ['pressureManagement', 0.2],
+    ['explosiveness', 0.2],
+  ]);
   return {
     fighterId: fighter.id,
-    pressure: mix(a, [
-      ['aggression', 0.6],
-      ['pressureManagement', 0.2],
-      ['explosiveness', 0.2],
-    ]),
+    // Half who they are, half how they fight. A counter striker's style pulls them back off
+    // the gas however aggressive their temperament reads on paper.
+    pressure: Math.max(0, Math.min(1, temperament * 0.5 + style.pressure * 0.5 - style.counterRate * 0.15)),
+    reach: Math.max(0, Math.min(1, style.range)),
     mobility: mix(a, [
       ['footwork', 0.6],
       ['agility', 0.25],

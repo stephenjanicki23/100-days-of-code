@@ -323,6 +323,8 @@ export interface MovementProfile {
   engine: number;
   guard: number;
   deception: number;
+  /** Where they want the fight: 0 in the pocket, 1 at the end of a long guard. */
+  reach: number;
   phase: number;
 }
 

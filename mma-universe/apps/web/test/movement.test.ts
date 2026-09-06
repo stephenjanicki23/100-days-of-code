@@ -211,6 +211,7 @@ describe('personality — fighters do not all move the same', () => {
     engine: 0.25,
     guard: 0.3,
     deception: 0.15,
+    reach: 0.12,
     phase: 0.4,
   };
   const outFighter = {
@@ -221,6 +222,7 @@ describe('personality — fighters do not all move the same', () => {
     engine: 0.9,
     guard: 0.9,
     deception: 0.9,
+    reach: 0.92,
     phase: 2.7,
   };
   const styled = buildTimeline(beats, a.id, b.id, 'CONDENSED', [pressureFighter, outFighter]);
