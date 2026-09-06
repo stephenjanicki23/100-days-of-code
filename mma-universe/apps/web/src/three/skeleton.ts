@@ -27,6 +27,9 @@ import {
   buildHair,
   buildShorts,
   buildSkin,
+  occluders,
+  occlusionAt,
+  toneAt,
 } from './body.ts';
 import { surfaceNoise } from './textures.ts';
 import type { FighterPalette } from './palette.ts';
@@ -67,6 +70,8 @@ function skinMaterial(palette: FighterPalette, noise: THREE.Texture): THREE.Mesh
     color: palette.skin,
     roughness: 0.74,
     metalness: 0,
+    // Occlusion and skin tone are baked into the mesh — see `shade`.
+    vertexColors: true,
     // Clearcoat stands in for sweat under the lights, which is much of what separates a
     // person on camera from a mannequin.
     clearcoat: 0.1,
@@ -116,6 +121,30 @@ function toGeometry(data: MeshData): THREE.BufferGeometry {
   return geometry;
 }
 
+/**
+ * Bakes occlusion and skin tone into a vertex colour attribute.
+ *
+ * Done here rather than in `body.ts` because it needs the normals, and the normals are three's
+ * to compute. It runs once per fighter at construction — a few thousand vertices against a few
+ * dozen occluders — and costs nothing per frame thereafter.
+ */
+function shade(geometry: THREE.BufferGeometry, tone: boolean): void {
+  const position = geometry.getAttribute('position');
+  const normal = geometry.getAttribute('normal');
+  const balls = occluders();
+  const colors = new Float32Array(position.count * 3);
+  for (let i = 0; i < position.count; i++) {
+    const point: [number, number, number] = [position.getX(i), position.getY(i), position.getZ(i)];
+    const facing: [number, number, number] = [normal.getX(i), normal.getY(i), normal.getZ(i)];
+    const ao = occlusionAt(point, facing, balls);
+    const [r, g, b] = tone ? toneAt(point) : [1, 1, 1];
+    colors[i * 3] = ao * r;
+    colors[i * 3 + 1] = ao * g;
+    colors[i * 3 + 2] = ao * b;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
 export class FighterModel {
   readonly root: THREE.Group;
   private readonly bones = new Map<Joint, THREE.Bone>();
@@ -145,12 +174,14 @@ export class FighterModel {
     const noise = surfaceNoise();
     const skin = skinMaterial(palette, noise);
     const trunks = new THREE.MeshStandardMaterial({
+      vertexColors: true,
       color: palette.trunks,
       roughness: 0.9,
       metalness: 0,
       roughnessMap: noise,
     });
     const gloves = new THREE.MeshPhysicalMaterial({
+      vertexColors: true,
       color: palette.gloves,
       roughness: 0.42,
       metalness: 0,
@@ -161,6 +192,7 @@ export class FighterModel {
     // Hair is dark, rough and reads almost entirely as silhouette at this distance, so it
     // wants no specular to speak of; the eyes want the opposite.
     const hair = new THREE.MeshStandardMaterial({
+      vertexColors: true,
       color: palette.hair,
       roughness: 0.82,
       metalness: 0,
@@ -180,6 +212,8 @@ export class FighterModel {
 
     for (const [data, material, casts] of parts) {
       const geometry = toGeometry(data);
+      // Skin gets the tone gradient as well; cloth and hair only want the occlusion.
+      if (material !== eyes) shade(geometry, material === skin);
       this.geometries.push(geometry);
       const mesh = new THREE.SkinnedMesh(geometry, material);
       mesh.castShadow = casts;

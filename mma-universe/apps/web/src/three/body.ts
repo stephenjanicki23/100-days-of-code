@@ -408,29 +408,76 @@ const HEAD_AT = 0;
 export const HEAD_RADII = [0.093, 0.115, 0.104] as const;
 const HEAD_OFFSET = [0, 0.105, 0.004] as const;
 
+/** A smooth bump: 1 at `centre`, falling to nothing over `width`. */
+function gauss(value: number, centre: number, width: number): number {
+  const t = (value - centre) / width;
+  return Math.exp(-t * t);
+}
+
 /**
- * Skull shaping.
+ * Skull and face shaping.
  *
- * A plain ellipsoid reads as an egg from every angle. Four smooth terms fix most of that: a
- * brow over the eyes, a jaw that narrows toward the chin, a fuller occiput, and cheekbones.
- * Deliberately conservative — a badly suggested face is worse than none, and at broadcast
- * distance the silhouette is doing nearly all the work.
+ * The first pass here was four conservative terms — a brow, a jaw, an occiput, cheekbones —
+ * on the reasoning that at broadcast distance the silhouette does all the work and a badly
+ * suggested face is worse than none. Both halves of that were wrong. The silhouette is not
+ * doing the work: a head with no nose, no mouth and no ears reads as a mannequin at any
+ * distance, and it survived a path tracer looking exactly as plastic as it does here. And the
+ * face that was actually shipping was not "none" — it was two black spheres standing proud of
+ * an egg, which is worse than a rough nose by a distance.
+ *
+ * So this sculpts a face. Every term is a smooth bump in direction space, which means the
+ * whole thing stays a pure function of a direction, differentiable everywhere, with no seams
+ * to hide and nothing to unwrap. `front` weights a term toward the face; squaring it keeps the
+ * nose and mouth from smearing round to the ears.
  */
 export function skullShape(nx: number, ny: number, nz: number): number {
   const front = Math.max(0, nz);
-  const brow = 0.055 * front * Math.exp(-Math.pow((ny - 0.18) / 0.2, 2));
-  const jaw = -0.09 * front * Math.max(0, -ny - 0.35) * (0.5 + Math.abs(nx));
-  const occiput = 0.045 * Math.max(0, -nz) * Math.exp(-Math.pow((ny + 0.05) / 0.45, 2));
-  const cheek = 0.03 * front * Math.abs(nx) * Math.exp(-Math.pow((ny + 0.08) / 0.22, 2));
+  const face = front * front;
+  const side = Math.abs(nx);
+
+  // The cranium.
+  const occiput = 0.045 * Math.max(0, -nz) * gauss(ny, -0.05, 0.45);
   const crown = -0.03 * Math.max(0, ny - 0.7);
-  // Shallow sockets, so the eyes have somewhere to sit. Without them the eyeballs are simply
-  // inside the head and never render.
-  const socket =
-    -0.055 *
-    front *
-    Math.exp(-Math.pow((Math.abs(nx) - 0.33) / 0.16, 2)) *
-    Math.exp(-Math.pow((ny - 0.06) / 0.13, 2));
-  return 1 + brow + jaw + occiput + cheek + crown + socket;
+  const temple = -0.035 * front * gauss(side, 0.78, 0.2) * gauss(ny, 0.32, 0.2);
+
+  // The brow, and the sockets under it. Deeper than before, because the eyes have to sit
+  // inside them rather than on them.
+  const brow = 0.062 * front * gauss(ny, 0.2, 0.15) * gauss(nx, 0, 0.55);
+  const socket = -0.038 * front * gauss(side, 0.33, 0.19) * gauss(ny, 0.04, 0.15);
+
+  // The nose: a bridge from between the brows, a ball at the end of it, and the wings of the
+  // nostrils either side. This is the single feature that stops a head reading as an egg.
+  const bridge = 0.105 * face * gauss(nx, 0, 0.13) * gauss(ny, 0.0, 0.24);
+  const tip = 0.165 * face * front * gauss(nx, 0, 0.16) * gauss(ny, -0.17, 0.10);
+  const nostril = 0.055 * face * front * gauss(side, 0.14, 0.06) * gauss(ny, -0.23, 0.06);
+
+  // The mouth: lips that come forward, a line between them that does not, and the dish of the
+  // philtrum above.
+  const philtrum = -0.022 * face * gauss(nx, 0, 0.055) * gauss(ny, -0.31, 0.055);
+  const lips = 0.05 * face * gauss(nx, 0, 0.28) * gauss(ny, -0.41, 0.085);
+  const mouthLine = -0.04 * face * gauss(nx, 0, 0.32) * gauss(ny, -0.41, 0.028);
+
+  // The lower face.
+  const cheek = 0.04 * front * gauss(side, 0.5, 0.2) * gauss(ny, -0.1, 0.18);
+  const chin = 0.052 * front * gauss(nx, 0, 0.24) * gauss(ny, -0.7, 0.15);
+  const jaw = -0.085 * front * Math.max(0, -ny - 0.35) * (0.5 + side);
+
+  return (
+    1 + occiput + crown + temple + brow + socket + bridge + tip + nostril +
+    philtrum + lips + mouthLine + cheek + chin + jaw
+  );
+}
+
+/**
+ * An ear.
+ *
+ * The first attempt scooped a concha out of the outward face, which at this size did not read
+ * as an ear at all: it cut the little ellipsoid into a crescent that stood off the head like a
+ * handle. At two centimetres tall the only thing that reads is the outline, so this only
+ * softens the top and leaves the rest alone.
+ */
+function earShape(_nx: number, ny: number, _nz: number): number {
+  return 1 - 0.18 * Math.max(0, ny - 0.45);
 }
 
 /**
@@ -531,13 +578,132 @@ export function buildBeard(): MeshData {
 /** Eyes and a nose. Small, dark, and enough to stop the head reading as blank. */
 export function buildFace(): MeshData {
   return merge([
-    blob('head', HEAD_AT, [0.018, 0.014, 0.015], [0.032, 0.111, 0.093], 10, 8),
-    blob('head', HEAD_AT, [0.018, 0.014, 0.015], [-0.032, 0.111, 0.093], 10, 8),
+    blob('head', HEAD_AT, EYE_RADII, [EYE_AT[0], EYE_AT[1], EYE_AT[2]], 12, 9),
+    blob('head', HEAD_AT, EYE_RADII, [-EYE_AT[0], EYE_AT[1], EYE_AT[2]], 12, 9),
   ]);
 }
 
-export function buildNose(): MeshData {
-  return blob('head', HEAD_AT, [0.018, 0.03, 0.024], [0, 0.088, 0.098], 10, 8);
+/**
+ * Where the eyes sit, and how big they are.
+ *
+ * They used to be 18mm spheres at z 0.093 on a skull whose front is at 0.108 — so they stood
+ * proud of the face and read as googly eyes stuck on an egg. Smaller, and set back far enough
+ * that the socket holds them; `keeps the eyes inside the head` in the tests measures it rather
+ * than trusting this comment.
+ */
+export const EYE_RADII = [0.0112, 0.0100, 0.0105] as const;
+export const EYE_AT = [0.0310, 0.1085, 0.0870] as const;
+
+/** An ear, flattened against the side of the head. */
+function ear(side: 'L' | 'R'): MeshData {
+  const x = side === 'L' ? 1 : -1;
+  return blob('head', HEAD_AT, [0.009, 0.021, 0.014], [x * 0.081, 0.098, -0.016], 10, 8, earShape);
+}
+
+/* ------------------------------------------------------------------ occlusion */
+
+/** A ball standing in for a piece of the body, for the purpose of blocking light. */
+export interface Occluder {
+  readonly at: readonly [number, number, number];
+  readonly radius: number;
+}
+
+/**
+ * The body, approximated as a few dozen balls.
+ *
+ * These are derived from the very sections the skin is lofted through, so the stand-in cannot
+ * drift away from the thing it stands in for: change a shoulder and its occluder changes with
+ * it. The head is added by hand because it is a blob rather than a tube.
+ */
+export function occluders(): Occluder[] {
+  const out: Occluder[] = [];
+  const add = (sections: readonly Section[]) => {
+    for (const section of sections) {
+      out.push({ at: pointOn(section.bone, section.at), radius: (section.rx + section.rz) / 2 });
+    }
+  };
+  add(TORSO);
+  add(NECK);
+  for (const side of ['L', 'R'] as const) {
+    add(arm(side));
+    add(leg(side));
+    add(foot(side));
+  }
+  const head = pointOn('head', HEAD_AT);
+  out.push({
+    at: [head[0] + HEAD_OFFSET[0], head[1] + HEAD_OFFSET[1], head[2] + HEAD_OFFSET[2]],
+    radius: (HEAD_RADII[0] + HEAD_RADII[2]) / 2,
+  });
+  return out;
+}
+
+/**
+ * How strongly occlusion darkens, and how dark it is allowed to get.
+ *
+ * The first pass ran at 1.35 against a floor of 0.34 and looked worse than no occlusion at
+ * all: with only a few dozen stand-ins the field is smooth and broad, so a strong setting does
+ * not carve creases, it paints whole limbs black wherever they happen to face the torso.
+ * Turned down until it does what it is for — seating the arms into the shoulders and the neck
+ * into the traps — and stops pretending to detail it does not have.
+ */
+const OCCLUSION_STRENGTH = 0.5;
+const OCCLUSION_FLOOR = 0.62;
+
+/**
+ * How much of the sky a point on the skin can actually see, in the bind pose.
+ *
+ * This is the single biggest reason the fighters read as moulded plastic. Real bodies are dark
+ * in the armpit, under the pectoral, in the groin, behind the knee and where the neck meets the
+ * shoulders — not because those places are in shadow from any particular lamp, but because
+ * there is a body in the way of most of the sky. Without it every crease is lit exactly like
+ * open skin and the whole figure flattens into one moulded piece, which no amount of lighting
+ * or renderer fixes: a path tracer produced the same doll.
+ *
+ * The estimate is the standard analytic one for a sphere, summed over the stand-ins above: a
+ * ball of radius r at distance l subtends r²/l² of the hemisphere, weighted by how squarely it
+ * sits in front of the surface. A ball behind the surface contributes nothing, which is what
+ * makes a limb stop occluding itself without any special case.
+ *
+ * Baked in the bind pose and left there. A closing elbow really should darken its own crease
+ * and this will not do that — but the alternative is recomputing occlusion for two fighters
+ * every frame, and a static crease is enormously closer to right than no crease at all.
+ */
+export function occlusionAt(
+  point: readonly [number, number, number],
+  normal: readonly [number, number, number],
+  balls: readonly Occluder[],
+): number {
+  let total = 0;
+  for (const ball of balls) {
+    const dx = ball.at[0] - point[0];
+    const dy = ball.at[1] - point[1];
+    const dz = ball.at[2] - point[2];
+    const distance = Math.hypot(dx, dy, dz);
+    if (distance < 1e-6) continue;
+    const facing = (normal[0] * dx + normal[1] * dy + normal[2] * dz) / distance;
+    if (facing <= 0) continue;
+    // Never let a ball the point is sitting on top of blow up the estimate.
+    const reach = Math.max(distance, ball.radius * 1.05);
+    total += (facing * ball.radius * ball.radius) / (reach * reach);
+  }
+  return OCCLUSION_FLOOR + (1 - OCCLUSION_FLOOR) * Math.exp(-total * OCCLUSION_STRENGTH);
+}
+
+/**
+ * Skin tone across the body.
+ *
+ * One flat colour head to toe is the other half of the plastic look. Real skin is not one
+ * colour: hands and feet and face carry more blood than the trunk, and the parts that live
+ * under the lights are a shade lighter than the parts that do not.
+ */
+export function toneAt(point: readonly [number, number, number]): [number, number, number] {
+  const height = point[1];
+  // Warmer toward the extremities, measured as distance from the body's mid-line.
+  const reach = Math.hypot(point[0], point[2]) * 2.2 + Math.max(0, 1.35 - height) * 0.25;
+  const warm = Math.min(0.16, reach * 0.16);
+  // And a shade lighter on the surfaces that face the lights.
+  const lift = Math.min(0.06, Math.max(0, height - 1.0) * 0.05);
+  return [1 + warm * 0.55 + lift, 1 - warm * 0.16 + lift, 1 - warm * 0.42 + lift];
 }
 
 /** Skin: everything the eye reads as the athlete. */
@@ -545,8 +711,11 @@ export function buildSkin(): MeshData {
   return merge([
     tube(TORSO),
     tube(NECK, 12),
-    blob('head', HEAD_AT, HEAD_RADII, HEAD_OFFSET, 22, 18, skullShape),
-    buildNose(),
+    // A nose and a mouth are a few millimetres across on a head this size; at 22 segments they
+    // were being averaged away by the very grid meant to carry them.
+    blob('head', HEAD_AT, HEAD_RADII, HEAD_OFFSET, 48, 40, skullShape),
+    ear('L'),
+    ear('R'),
     tube(arm('L'), 12),
     tube(arm('R'), 12),
     tube(leg('L'), 14),
