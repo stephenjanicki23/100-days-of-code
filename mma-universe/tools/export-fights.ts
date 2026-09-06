@@ -126,6 +126,48 @@ for (const want of wanted) {
   );
 }
 
+/**
+ * And one fight picked for the matchup rather than the finish.
+ *
+ * The other three are chosen by how they ended, which says nothing about how they looked. A
+ * showcase for cage control needs the fight cage control is *about*: someone who wants the
+ * middle against someone who wants the outside. Picked by the widest gap in where the two men
+ * want the fight to happen, over a slightly deeper pool than the top contenders, because a
+ * clean style clash is rarer than a good fighter.
+ */
+{
+  const pool = universe.state.fighters
+    .filter((f) => f.status === 'active' && currentAbility(f) > 125)
+    .map((fighter) => ({ fighter, profile: movementProfile(fighter, 'styles') }));
+
+  let best: { a: Fighter; b: Fighter; gap: number } | undefined;
+  for (const forward of pool) {
+    for (const outside of pool) {
+      if (forward.fighter.divisionKey !== outside.fighter.divisionKey) continue;
+      if (forward.fighter.id === outside.fighter.id) continue;
+      const gap =
+        (forward.profile.pressure - outside.profile.pressure) +
+        (outside.profile.reach - forward.profile.reach);
+      if (!best || gap > best.gap) best = { a: forward.fighter, b: outside.fighter, gap };
+    }
+  }
+
+  if (!best) {
+    console.error('no style clash found');
+  } else {
+    const label = 'Styles make fights';
+    const result =
+      findFight(best.a, best.b, 3, (r) => r.events.length > 180, `${label}-${best.a.id}`) ??
+      simulateFight(best.a, best.b, { fightId: `${label}-${best.a.id}`, rounds: 3 }, Rng.fromSeed(`${label}-${best.a.id}`));
+    fights.push(pack(best.a, best.b, result, label));
+    console.error(
+      `${label}: ${displayName(best.a)} (${fighterStyle(best.a).primary.label}) vs ` +
+        `${displayName(best.b)} (${fighterStyle(best.b).primary.label}) — gap ${best.gap.toFixed(2)}, ` +
+        `${result.outcome} (${result.events.length} events)`,
+    );
+  }
+}
+
 const out = process.argv[2] ?? 'fights.json';
 writeFileSync(out, JSON.stringify(fights));
 console.error(`wrote ${out}`);

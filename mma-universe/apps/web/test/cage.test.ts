@@ -12,7 +12,8 @@ import { Rng, generateUniverse, mapEventToAnimation, simulateFight, type FightEv
 
 import { buildTimeline, sampleFrame } from '../src/three/player.ts';
 import { CAGE_INNER, seatPositions, walkCage } from '../src/three/cage.ts';
-import type { AnimationBeatWire, MovementProfile } from '../src/types.ts';
+import type { AnimationBeatWire, CameraHint, MovementProfile } from '../src/types.ts';
+import { CAMERA_REACH, CAMERA_PRESETS, planCameraSides, solveCamera } from '../src/three/camera.ts';
 
 const universe = generateUniverse({ seed: 'cage-tests' });
 const a = universe.state.fighters[12]!;
@@ -167,5 +168,138 @@ describe('the cage walk itself', () => {
       );
       expect(step, `jump at beat ${index}`).toBeLessThan(0.85);
     }
+  });
+});
+
+describe('the camera copes with a fight that is not in the middle', () => {
+  const HINTS = Object.keys(CAMERA_PRESETS) as CameraHint[];
+
+  /** Every position the engagement can reach, at every angle the pair can stand. */
+  const SEATS: { centre: [number, number]; facing: number }[] = [];
+  for (let ring = 0; ring <= 4; ring++) {
+    const radius = (CAGE_INNER * ring) / 4;
+    for (let step = 0; step < 16; step++) {
+      const angle = (step / 16) * Math.PI * 2;
+      const centre: [number, number] = [Math.cos(angle) * radius, Math.sin(angle) * radius];
+      for (let turn = 0; turn < 24; turn++) {
+        SEATS.push({ centre, facing: (turn / 24) * Math.PI * 2 });
+      }
+    }
+  }
+  const SIDES = planCameraSides(SEATS);
+
+  function everyShot(
+    time: number,
+    visit: (shot: ReturnType<typeof solveCamera>, seat: (typeof SEATS)[number]) => void,
+  ): void {
+    for (const hint of HINTS) {
+      SEATS.forEach((seat, index) => {
+        visit(solveCamera(hint, seat.centre[0], seat.centre[1], time, seat.facing, SIDES[index]!), seat);
+      });
+    }
+  }
+
+  it('never stands closer to the action than the fighters stand to each other', () => {
+    // The failure this guards: a fixed world-space offset put the lens between the two men
+    // once the fight reached the camera's own side of the cage, filming somebody's back from
+    // half a metre away.
+    let closest = Infinity;
+    everyShot(3.2, (shot, seat) => {
+      closest = Math.min(
+        closest,
+        Math.hypot(shot.position[0] - seat.centre[0], shot.position[2] - seat.centre[1]),
+      );
+    });
+    expect(closest).toBeGreaterThan(1.6);
+  });
+
+  it('never shoots down the line of the two fighters', () => {
+    // And the failure that fixing the first one caused: the pair face along the axis they are
+    // driven down, which points at the fence, so a lens brought in on the radius looks
+    // straight through the near man at the far one.
+    let flattest = Math.PI;
+    everyShot(2.4, (shot, seat) => {
+      const toLens = Math.atan2(shot.position[0] - seat.centre[0], shot.position[2] - seat.centre[1]);
+      let off = Math.abs(((toLens - seat.facing + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      off = Math.min(off, Math.PI - off);
+      flattest = Math.min(flattest, off);
+    });
+    expect((flattest * 180) / Math.PI).toBeGreaterThan(25);
+  });
+
+  it('keeps the lens inside the cage wherever the fight goes', () => {
+    everyShot(1.1, (shot) => {
+      expect(Math.hypot(shot.position[0], shot.position[2])).toBeLessThanOrEqual(CAMERA_REACH + 1e-6);
+    });
+  });
+
+  /**
+   * The largest step the shot takes as some parameter is swept, at a given resolution.
+   *
+   * Asserting a threshold on this would only say the motion is gentle. Halving the step and
+   * watching the largest jump halve with it is what actually distinguishes a shot that moves
+   * fast from a shot that cuts — a discontinuity does not care how finely you sample it.
+   */
+  function roughest(steps: number, sweep: (t: number) => ReturnType<typeof solveCamera>): number {
+    let worst = 0;
+    let previous = sweep(0);
+    for (let step = 1; step <= steps; step++) {
+      const shot = sweep(step / steps);
+      worst = Math.max(
+        worst,
+        Math.hypot(shot.position[0] - previous.position[0], shot.position[2] - previous.position[2]),
+      );
+      previous = shot;
+    }
+    return worst;
+  }
+
+  it('does not lurch when the fight drifts off the centre mark', () => {
+    for (const hint of HINTS) {
+      for (const facing of [0, 0.7, 1.57, 2.4, 3.9, 5.1]) {
+        const sweep = (t: number) => solveCamera(hint, CAGE_INNER * t, CAGE_INNER * t * 0.35, 0, facing, 1);
+        expect(roughest(800, sweep)).toBeLessThan(roughest(400, sweep) * 0.6);
+      }
+    }
+  });
+
+  it('does not lurch as the pair turn', () => {
+    for (const hint of HINTS) {
+      for (const radius of [0, 1.9, CAGE_INNER]) {
+        const sweep = (t: number) => solveCamera(hint, radius, 0, 0, t * Math.PI * 2, -1);
+        expect(roughest(800, sweep)).toBeLessThan(roughest(400, sweep) * 0.6);
+      }
+    }
+  });
+});
+
+describe('choosing which side of the fighters to shoot from', () => {
+  it('crosses the fighters rarely, not every time they turn a little', () => {
+    // The hysteresis is the whole point: crossing the line is a cut, and a pair turning on
+    // the spot must not make the camera flit back and forth across them.
+    const seats = Array.from({ length: 600 }, (_, index) => ({
+      centre: [3.1, 0.4] as [number, number],
+      facing: Math.sin(index * 0.05) * 0.9,
+    }));
+    const sides = planCameraSides(seats);
+    const crossings = sides.filter((side, index) => index > 0 && side !== sides[index - 1]).length;
+    expect(crossings).toBeLessThan(4);
+  });
+
+  it('does cross when the fight turns all the way round', () => {
+    const seats = Array.from({ length: 400 }, (_, index) => ({
+      centre: [3.4, 0] as [number, number],
+      facing: (index / 400) * Math.PI * 4,
+    }));
+    const sides = planCameraSides(seats);
+    expect(new Set(sides).size).toBe(2);
+  });
+
+  it('is a pure function of the seats, so a replay picks the same angles', () => {
+    const seats = Array.from({ length: 120 }, (_, index) => ({
+      centre: [Math.sin(index * 0.3) * 3, Math.cos(index * 0.21) * 3] as [number, number],
+      facing: index * 0.17,
+    }));
+    expect(planCameraSides(seats)).toEqual(planCameraSides(seats));
   });
 });

@@ -39,6 +39,7 @@ import {
 import { planFootwork, footAt, type FootPlan, type PathSample } from './footwork.ts';
 import type { MovementProfile } from '../types.ts';
 import { walkCage, CAGE_INNER } from './cage.ts';
+import { planCameraSides } from './camera.ts';
 import { solveLeg, rotateY as rotateGround, eulerToMatrix, transposeApply, subtract } from './ik.ts';
 import { JOINT_NAMES, SKELETON, type Joint, type Vec3 } from './rig.ts';
 
@@ -111,6 +112,12 @@ export interface TimelineBeat {
   readonly facing: number;
   /** Who has their back to the fence on this beat: 0 for A, 1 for B, -1 for neither. */
   readonly pinned: number;
+  /**
+   * Which side of the two fighters the camera shoots from, 1 or -1. Decided per beat rather
+   * than per frame because crossing the line between them is a jump of several metres however
+   * it is smoothed — see `planCameraSides`.
+   */
+  readonly cameraSide: number;
   /** How long this beat takes to take the body over. */
   readonly blend: number;
   /** How strongly this beat's clip claims each part of the body. */
@@ -263,6 +270,7 @@ export function buildTimeline(
       centre: [0, 0, 0],
       facing: 0,
       pinned: -1,
+      cameraSide: 1,
       blend: follows ? BLEND_EMERGENCY : blendFor(directive.clip, directive.reaction, event.eventType),
       claim: isTotal(directive.clip) ? FULL_MASK : claimOf(clip),
       follows,
@@ -281,6 +289,8 @@ export function buildTimeline(
       phase: [resolved[0].phase, resolved[1].phase],
     },
   );
+  // And which side of them there is room to shoot from, walked over the same seats.
+  const sides = planCameraSides(seats);
   const placed = beats.map((beat, index) => {
     const seat = seats[index]!;
     return {
@@ -288,6 +298,7 @@ export function buildTimeline(
       centre: [seat.centre[0], 0, seat.centre[1]] as Vec3,
       facing: seat.facing,
       pinned: seat.pinned,
+      cameraSide: sides[index]!,
     };
   });
   beats.length = 0;
@@ -372,6 +383,8 @@ export interface Frame {
   readonly a: FighterFrame;
   readonly b: FighterFrame;
   readonly camera: CameraHint;
+  /** Which side of the fighters this beat's shot is taken from — see `TimelineBeat`. */
+  readonly cameraSide: number;
   readonly description: string;
   readonly round: number;
   readonly roundTime: string;
@@ -664,6 +677,7 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
       a: { id: timeline.fighterA, pose: IDLE, position: [0, 0, -0.81], yaw: 0, legFreedom: 1, rest: 1, stagger: 0, feint: 0, fatigue: 0 },
       b: { id: timeline.fighterB, pose: IDLE, position: [0, 0, 0.81], yaw: Math.PI, legFreedom: 1, rest: 1, stagger: 0, feint: 0, fatigue: 0 },
       camera: 'WIDE',
+      cameraSide: 1,
       description: '',
       round: 1,
       roundTime: '05:00',
@@ -768,6 +782,7 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
       fatigue: conditions[1]!.fatigue,
     },
     camera: beat.camera,
+    cameraSide: beat.cameraSide,
     description: beat.event.description,
     round: beat.event.round,
     roundTime: beat.event.roundTime,

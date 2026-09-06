@@ -248,7 +248,13 @@ export class FightViewer {
 
     const centreX = (frame.a.position[0] + frame.b.position[0]) / 2;
     const centreZ = (frame.a.position[2] + frame.b.position[2]) / 2;
-    const shot = solveCamera(frame.camera, centreX, centreZ, time);
+    // Taken from where the two men actually are, not the beat's nominal axis, so the shot
+    // follows the fighters through a transition rather than the choreography's plan for them.
+    const facing = Math.atan2(
+      frame.b.position[0] - frame.a.position[0],
+      frame.b.position[2] - frame.a.position[2],
+    );
+    const shot = solveCamera(frame.camera, centreX, centreZ, time, facing, frame.cameraSide);
     this.desiredPosition.set(shot.position[0], shot.position[1], shot.position[2]);
     this.desiredTarget.set(shot.target[0], shot.target[1], shot.target[2]);
 

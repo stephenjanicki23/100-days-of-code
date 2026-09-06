@@ -54,9 +54,21 @@ export interface MovementProfile {
   readonly phase: number;
 }
 
-/** Attributes run to 200; this maps the useful middle of that range onto 0 to 1. */
+/**
+ * Maps an attribute onto 0 to 1 across the range fighters are actually generated in.
+ *
+ * This was written against a 0-to-200 scale that the generator does not produce: attributes
+ * come out roughly 1 to 98, centred near 47, so subtracting 50 and dividing by 110 clamped
+ * the median fighter to zero on every trait derived here. Mobility, guard, engine and
+ * deception all sat on their floor for the whole roster, and only the top few per cent of a
+ * division moved at all — invisible, because a floored trait produces stillness rather than
+ * an error.
+ *
+ * Recentred on the measured distribution (p05 26, p50 47, p95 76), which puts the median pro
+ * a little below the middle and lets the tails reach the ends without pinning there.
+ */
 function norm(value: number): number {
-  return Math.max(0, Math.min(1, (value - 50) / 110));
+  return Math.max(0, Math.min(1, (value - 20) / 65));
 }
 
 function mix(attributes: AttributeSet, parts: readonly [keyof AttributeSet, number][]): number {

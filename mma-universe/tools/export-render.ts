@@ -115,7 +115,11 @@ const frames = times.map((time) => {
   // A still is a chosen photograph, so it gets the tight lens whatever the beat's own hint
   // was; a clip keeps the hint, because there the camera is following the fight.
   const hint: CameraHint = mode === 'stills' ? 'CAGE_SIDE' : frame.camera;
-  const shot = solveCamera(hint, centreX, centreZ, time);
+  const facing = Math.atan2(
+    frame.b.position[0] - frame.a.position[0],
+    frame.b.position[2] - frame.a.position[2],
+  );
+  const shot = solveCamera(hint, centreX, centreZ, time, facing, frame.cameraSide);
   return {
     time,
     description: frame.description,
