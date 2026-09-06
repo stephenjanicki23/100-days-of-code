@@ -182,7 +182,10 @@ function spacingFor(position: FightPositionWire): number {
   switch (position) {
     case 'CLINCH':
     case 'CAGE_CLINCH':
-      return 0.62;
+      // 0.62 is about right for two torsos and hopelessly wrong once the arms are in it: on
+      // screen the pair simply merged, with one man's gloves coming out of the other's chest.
+      // A clinch is close, not co-located.
+      return 0.82;
     case 'TAKEDOWN_ATTEMPT':
       return 0.8;
     case 'STUNNED':

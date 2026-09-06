@@ -400,14 +400,21 @@ const NECK: Section[] = [
  * crotch is a single closed surface, the legs start well up inside it, and the sections run
  * bottom to top like everything else. `winds every tube the same way round` in the tests holds
  * the last of those, since it is invisible in the geometry and only shows on screen.
+ *
+ * Then cut down twice more from looking at them on a fighter. The skirt was eighteen
+ * centimetres of half-width hanging to below the crotch, which is a kilt: wider than the legs
+ * beneath it, so it read as a bell with the thighs lost inside. It now stops at the crotch at
+ * roughly hip width and the legs carry everything below. And the legs were pinned almost
+ * entirely to the hips at the top, so a stepping fighter left one hanging behind as a loose
+ * flap; the weights now hand over to the thigh across three sections instead of one.
  */
 const SHORTS_SKIRT: Section[] = [
-  { bone: 'hips', at: -0.86, rx: 0.172, rz: 0.134, weights: { hips: 1 } },
-  { bone: 'hips', at: -0.46, rx: 0.184, rz: 0.143, weights: { hips: 1 } },
-  { bone: 'hips', at: 0.08, rx: 0.177, rz: 0.139, weights: { hips: 1 } },
-  { bone: 'hips', at: 0.58, rx: 0.164, rz: 0.129, weights: { hips: 0.9, spine: 0.1 } },
-  { bone: 'hips', at: 1.02, rx: 0.148, rz: 0.115, weights: { hips: 0.55, spine: 0.45 } },
-  { bone: 'hips', at: 1.34, rx: 0.131, rz: 0.101, weights: { hips: 0.25, spine: 0.75 } },
+  { bone: 'hips', at: -0.42, rx: 0.152, rz: 0.124, weights: { hips: 1 } },
+  { bone: 'hips', at: -0.12, rx: 0.156, rz: 0.127, weights: { hips: 1 } },
+  { bone: 'hips', at: 0.3, rx: 0.153, rz: 0.124, weights: { hips: 1 } },
+  { bone: 'hips', at: 0.72, rx: 0.145, rz: 0.116, weights: { hips: 0.9, spine: 0.1 } },
+  { bone: 'hips', at: 1.08, rx: 0.134, rz: 0.106, weights: { hips: 0.55, spine: 0.45 } },
+  { bone: 'hips', at: 1.34, rx: 0.126, rz: 0.099, weights: { hips: 0.25, spine: 0.75 } },
 ];
 
 /**
@@ -423,13 +430,13 @@ export function shortsLeg(side: 'L' | 'R', length: number): Section[] {
     // Started up inside the skirt, so a leg begins where the skirt is still solid and cannot
     // leave a seam whatever the two of them do as the fighter moves — but not so far up that
     // the trunks have geometry level with the ribs, which is where they started.
-    { bone, at: -0.30, rx: 0.126, rz: 0.116, weights: { hips: 0.95, [bone]: 0.05 } },
-    { bone, at: -0.12, rx: 0.134, rz: 0.125, weights: { hips: 0.62, [bone]: 0.38 } },
-    { bone, at: 0.06, rx: 0.134, rz: 0.128, weights: { hips: 0.22, [bone]: 0.78 } },
-    { bone, at: hem * 0.55, rx: 0.129, rz: 0.124, weights: { [bone]: 1 } },
+    { bone, at: -0.30, rx: 0.116, rz: 0.108, weights: { hips: 0.86, [bone]: 0.14 } },
+    { bone, at: -0.12, rx: 0.124, rz: 0.116, weights: { hips: 0.5, [bone]: 0.5 } },
+    { bone, at: 0.06, rx: 0.126, rz: 0.12, weights: { hips: 0.15, [bone]: 0.85 } },
+    { bone, at: hem * 0.55, rx: 0.122, rz: 0.117, weights: { [bone]: 1 } },
     // The hem stands off the thigh, because cloth does.
-    { bone, at: hem, rx: 0.119, rz: 0.115 },
-    { bone, at: hem + 0.035, rx: 0.106, rz: 0.102 },
+    { bone, at: hem, rx: 0.113, rz: 0.109 },
+    { bone, at: hem + 0.035, rx: 0.101, rz: 0.097 },
   ];
 }
 
