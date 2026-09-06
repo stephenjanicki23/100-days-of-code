@@ -24,7 +24,7 @@ import type { PromotionEvent } from '../domain/event.ts';
 import { simulateFight, type FightResult } from '../fight/engine.ts';
 import { applyFightResult } from './fight-application.ts';
 import { bookEvent, awardBonuses, isEventDue, settleEvent } from '../promotion/scheduling.ts';
-import { makeMatches, type MatchmakingContext } from '../promotion/matchmaking.ts';
+import { isTitleEligible, makeMatches, type MatchmakingContext } from '../promotion/matchmaking.ts';
 import { buildAllRankings } from '../promotion/rankings.ts';
 import { assessTitle, promoteInterim, rankingChampionId, vacateTitle } from '../promotion/titles.ts';
 import { generateNews } from '../world/news.ts';
@@ -271,6 +271,9 @@ function findReplacement(
   const candidates = universe.state.fighters.filter((fighter) => {
     if (fighter.divisionKey !== fight.divisionKey) return false;
     if (titleholders.has(fighter.id)) return false;
+    // Stepping into a championship bout on short notice still requires being a credible
+    // challenger. Without this a one-and-seven fighter took a title fight and won it.
+    if (fight.isTitleFight && !isTitleEligible(fighter)) return false;
     if (fighter.status !== 'active' || hasOpenInjury(fighter, date)) return false;
     if (fighter.id === opponent.id || fighter.campId === opponent.campId) return false;
     if (fighter.promotionId !== opponent.promotionId) return false;

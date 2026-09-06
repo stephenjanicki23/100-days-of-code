@@ -305,11 +305,17 @@ export function generateUniverse(config: UniverseGenerationConfig): Universe {
 
   // --- fighters --------------------------------------------------------------------
   const fighterRng = universe.rngFor('genesis', 'fighters');
+  const takenFighterNames = new Set<string>();
+  const addFighter = (fighter: ReturnType<typeof generateFighter>) => {
+    takenFighterNames.add(`${fighter.firstName} ${fighter.lastName}`);
+    state.fighters.push(fighter);
+  };
+
   const allocation = allocateDivisions(fighterCount);
   for (const [divisionKey, count] of allocation) {
     for (let i = 0; i < count; i++) {
       const id = universe.nextId('fighter');
-      state.fighters.push(generateFighter(fighterRng, { id, date: startDate, divisionKey }));
+      addFighter(generateFighter(fighterRng, { id, date: startDate, divisionKey, takenNames: takenFighterNames }));
     }
   }
 
@@ -320,7 +326,7 @@ export function generateUniverse(config: UniverseGenerationConfig): Universe {
     const eliteCount = definition.populationWeight >= 1 ? 3 : definition.populationWeight >= 0.5 ? 2 : 1;
     for (let i = 0; i < eliteCount; i++) {
       const id = universe.nextId('fighter');
-      state.fighters.push(
+      addFighter(
         generateFighter(eliteRng, {
           id,
           date: startDate,
@@ -328,13 +334,14 @@ export function generateUniverse(config: UniverseGenerationConfig): Universe {
           talentFloor: 184,
           ageRange: [26, 34],
           realisationFloor: 0.9,
+          takenNames: takenFighterNames,
         }),
       );
     }
     // …and a couple of genuine prospects with a ceiling they have not reached yet.
     for (let i = 0; i < 2; i++) {
       const id = universe.nextId('fighter');
-      state.fighters.push(
+      addFighter(
         generateFighter(eliteRng, {
           id,
           date: startDate,
@@ -342,6 +349,7 @@ export function generateUniverse(config: UniverseGenerationConfig): Universe {
           talentFloor: 172,
           ageRange: [19, 23],
           realisationFloor: 0.45,
+          takenNames: takenFighterNames,
         }),
       );
     }

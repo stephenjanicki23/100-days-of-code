@@ -21,11 +21,18 @@ import { currentAbility, type Fighter } from '../domain/fighter.ts';
 import { makeMatches, type BoutProposal, type MatchmakingContext } from './matchmaking.ts';
 import type { Universe } from '../universe/universe.ts';
 
-/** How often each tier of promotion puts on a show, in days. */
+/**
+ * How often each tier of promotion puts on a show, in days.
+ *
+ * The major promotion runs roughly forty cards a year, which is not just flavour: with twelve
+ * divisions and champions defending twice a year, a twenty-three-show calendar *forces* a
+ * belt onto essentially every card. Forty shows is what makes a title fight feel like an
+ * occasion rather than the default.
+ */
 export const EVENT_CADENCE: Record<Promotion['tier'], number> = {
-  global: 16,
-  regional: 32,
-  developmental: 45,
+  global: 9,
+  regional: 26,
+  developmental: 40,
 };
 
 /** How far ahead a card is announced. Long enough for a real camp. */
@@ -81,13 +88,23 @@ export function bookEvent(
   const eventDate = addDays(date, BOOKING_LEAD_DAYS);
   const eventId = universe.nextId('event');
 
-  // Bigger shows go to bigger buildings, and a promotion's own prestige gates its access.
+  // Bigger shows go to bigger buildings. Weighting the whole venue list by prestige was not
+  // enough — it still put a numbered pay-per-view in a six-thousand-seat hall while a routine
+  // fight night got the dome — so each tier picks from a band of the venue list instead.
   const affordable = venues.filter((venue) => venue.prestige <= promotion.prestige + 12);
-  const venue = affordable.length > 0
-    ? rng.pickWeighted(
-        affordable.map((candidate) => [candidate, tier === 'numbered' ? candidate.prestige ** 1.5 : 1 / (1 + Math.abs(candidate.prestige - 45))] as const),
-      )
-    : venues[0];
+  const byPrestige = [...affordable].sort((a, b) => b.prestige - a.prestige);
+  const band =
+    tier === 'numbered'
+      ? // The flagship shows go to the biggest buildings available, full stop.
+        byPrestige.slice(0, 6)
+      : tier === 'fight_night'
+        ? affordable.filter((venue) => venue.prestige >= 30 && venue.prestige < 70)
+        : affordable.filter((venue) => venue.prestige < 55);
+  const candidates = band.length > 0 ? band : affordable;
+  const venue =
+    candidates.length > 0
+      ? rng.pickWeighted(candidates.map((candidate) => [candidate, Math.max(1, candidate.prestige)] as const))
+      : venues[0];
 
   const fights: Fight[] = [];
   let boutOrder = 0;

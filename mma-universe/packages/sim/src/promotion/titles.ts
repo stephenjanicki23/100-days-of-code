@@ -76,7 +76,9 @@ export function promoteInterim(title: TitleRecord, date: SimDate): string | unde
 }
 
 /** How long a champion has been unable to defend. */
-export const INTERIM_THRESHOLD_DAYS = 300;
+/** Kept clear of the defence interval, so an ordinary gap between defences never looks
+ * like an absent champion. */
+export const INTERIM_THRESHOLD_DAYS = 420;
 /**
  * Stripping a champion is a notable event, not routine housekeeping. At 640 days the
  * simulation was vacating belts faster than it could fill them and divisions accumulated

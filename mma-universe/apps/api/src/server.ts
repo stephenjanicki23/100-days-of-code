@@ -30,6 +30,7 @@ import {
   FIGHT_EVENT_JSON_SCHEMA,
   animationRegistry,
   requiredClips,
+  hottestStorylines,
   type Fight,
   type Fighter,
   type Universe,
@@ -259,9 +260,14 @@ app.get('/champions', async () => {
     });
 });
 
-/* --------------------------------------------------------------------- news */
+/* ------------------------------------------------------------------ activity */
 
-app.get<{ Querystring: { limit?: string } }>('/events', async (request) => {
+/**
+ * The raw world activity log — every domain event the simulation recorded. Distinct from
+ * `/events`, which in this domain means fight cards; the news engine reads this feed, and it
+ * is also the closest thing to a debugging view of what the world just did.
+ */
+app.get<{ Querystring: { limit?: string } }>('/activity', async (request) => {
   const limit = Math.min(Number(request.query.limit ?? 40), 400);
   return recentEvents(service.db, limit);
 });
@@ -349,6 +355,97 @@ app.post<{ Body?: { a?: string; b?: string; rounds?: number; titleFight?: boolea
     };
   },
 );
+
+/* ------------------------------------------------------- cards, news, stories */
+
+app.get<{ Querystring: { status?: string; limit?: string } }>('/events', async (request) => {
+  const limit = Math.min(Number(request.query.limit ?? 30), 200);
+  const wanted = request.query.status;
+  const cards = [...service.universe.state.cards]
+    .filter((card) => (wanted ? card.status === wanted : true))
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, limit);
+
+  return cards.map((card) => {
+    const fights = service.universe.fightsOnCard(card.id);
+    const headline = fights[0];
+    return {
+      ...card,
+      venue: service.universe.venue(card.venueId ?? ''),
+      promotion: service.universe.promotion(card.promotionId)?.shortName,
+      boutCount: fights.filter((fight) => fight.status !== 'cancelled').length,
+      headline: headline
+        ? `${service.universe.fighter(headline.fighterAId)?.lastName} vs ${service.universe.fighter(headline.fighterBId)?.lastName}`
+        : undefined,
+      hasTitleFight: fights.some((fight) => fight.isTitleFight),
+    };
+  });
+});
+
+app.get<{ Params: { id: string } }>('/events/:id', async (request, reply) => {
+  const card = service.universe.card(request.params.id);
+  if (!card) return reply.code(404).send({ error: 'event not found' });
+  const fights = service.universe.fightsOnCard(card.id);
+  return {
+    ...card,
+    venue: service.universe.venue(card.venueId ?? ''),
+    promotion: service.universe.promotion(card.promotionId),
+    fights: fights.map((fight) => {
+      const a = service.universe.fighter(fight.fighterAId);
+      const b = service.universe.fighter(fight.fighterBId);
+      return {
+        ...fight,
+        divisionName: division(fight.divisionKey).name,
+        fighterA: a ? fighterSummary(service.universe, a) : undefined,
+        fighterB: b ? fighterSummary(service.universe, b) : undefined,
+        winnerName: fight.winnerId ? displayName(service.universe.requireFighter(fight.winnerId)) : undefined,
+      };
+    }),
+  };
+});
+
+app.get<{ Querystring: { limit?: string; category?: string } }>('/news', async (request) => {
+  const limit = Math.min(Number(request.query.limit ?? 40), 300);
+  const category = request.query.category;
+  return [...service.universe.state.news]
+    .filter((article) => (category ? article.category === category : true))
+    .reverse()
+    .slice(0, limit);
+});
+
+app.get<{ Querystring: { limit?: string } }>('/storylines', async (request) => {
+  const limit = Math.min(Number(request.query.limit ?? 20), 100);
+  return hottestStorylines(service.universe.state.storylines, limit).map((storyline) => ({
+    ...storyline,
+    participantNames: storyline.participants.map(
+      (id) => service.universe.fighter(id)?.lastName ?? service.universe.camp(id)?.name ?? id,
+    ),
+  }));
+});
+
+/** The title picture: who holds what, and every reign that came before. */
+app.get<{ Querystring: { promotion?: string } }>('/titles', async (request) => {
+  const promotionId = request.query.promotion ?? service.universe.state.promotions[0]?.id;
+  return service.universe.state.titles
+    .filter((title) => title.promotionId === promotionId)
+    .sort((a, b) => division(a.divisionKey).order - division(b.divisionKey).order)
+    .map((title) => {
+      const champion = title.championId ? service.universe.fighter(title.championId) : undefined;
+      const interim = title.interimChampionId ? service.universe.fighter(title.interimChampionId) : undefined;
+      return {
+        divisionKey: title.divisionKey,
+        divisionName: division(title.divisionKey).name,
+        since: title.since,
+        defences: title.defences,
+        champion: champion ? fighterSummary(service.universe, champion) : undefined,
+        interimChampion: interim ? fighterSummary(service.universe, interim) : undefined,
+        lineage: title.lineage.map((reign) => ({
+          ...reign,
+          name: service.universe.fighter(reign.fighterId)?.lastName ?? reign.fighterId,
+        })),
+      };
+    });
+});
 
 /** The contract itself, for non-TypeScript consumers such as Unreal or Unity. */
 app.get('/schema/fight-event', async () => FIGHT_EVENT_JSON_SCHEMA);

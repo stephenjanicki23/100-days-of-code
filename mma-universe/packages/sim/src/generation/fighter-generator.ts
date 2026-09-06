@@ -43,6 +43,11 @@ export interface FighterGenerationOptions {
   /** Forces an age band, used when seeding a specific career stage. */
   readonly ageRange?: readonly [number, number];
   /**
+   * Full names already in use. A world with two Loïc Marchands produces headlines like
+   * "Marchand beats Marchand", and a reader cannot tell the fighters apart.
+   */
+  readonly takenNames?: ReadonlySet<string>;
+  /**
    * Minimum fraction of potential this fighter has realised. Champions are not merely
    * talented — they are talented people who arrived. Used when seeding the top of a
    * division so the world opens with credible titleholders.
@@ -358,10 +363,20 @@ export function generateFighter(seedRng: Rng, options: FighterGenerationOptions)
   const lastFightOffset = proFights === 0 ? undefined : rng.int(20, 430);
   const daysSinceLastFight = lastFightOffset ?? 999;
 
+  // Draw a name that nobody else in the world already has.
+  let firstName = rng.pick(firstNames);
+  let lastName = rng.pick(origin.last);
+  if (options.takenNames) {
+    for (let attempt = 0; attempt < 50 && options.takenNames.has(`${firstName} ${lastName}`); attempt++) {
+      firstName = rng.pick(firstNames);
+      lastName = rng.pick(origin.last);
+    }
+  }
+
   const fighter: Fighter = {
     id: options.id,
-    firstName: rng.pick(firstNames),
-    lastName: rng.pick(origin.last),
+    firstName,
+    lastName,
     nickname: rng.bool(0.42) ? rng.pick(NICKNAMES) : undefined,
     sex,
     birthDate,

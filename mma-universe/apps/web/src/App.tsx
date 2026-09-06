@@ -8,6 +8,8 @@ import { Fighters } from './pages/Fighters.tsx';
 import { FighterProfile } from './pages/FighterProfile.tsx';
 import { Rankings } from './pages/Rankings.tsx';
 import { Camps, CampDetail } from './pages/Camps.tsx';
+import { Events, EventDetailPage } from './pages/Events.tsx';
+import { News } from './pages/News.tsx';
 import { FightCenter } from './pages/FightCenter.tsx';
 import type { SimulationState } from './types.ts';
 
@@ -15,7 +17,9 @@ const NAV = [
   { path: '', label: 'Dashboard' },
   { path: 'rankings', label: 'Rankings' },
   { path: 'fighters', label: 'Fighters' },
+  { path: 'events', label: 'Events' },
   { path: 'camps', label: 'Camps' },
+  { path: 'news', label: 'The Sport' },
   { path: 'fight-center', label: 'Fight Center' },
 ];
 
@@ -74,6 +78,10 @@ function Screen({ segments }: { segments: readonly string[] }) {
       return second ? <FighterProfile id={second} /> : <Fighters />;
     case 'camps':
       return second ? <CampDetail id={second} /> : <Camps />;
+    case 'events':
+      return second ? <EventDetailPage id={second} /> : <Events />;
+    case 'news':
+      return <News />;
     case 'fight-center':
       return <FightCenter id={second} />;
     default:

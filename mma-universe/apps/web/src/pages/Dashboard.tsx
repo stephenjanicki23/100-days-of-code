@@ -8,7 +8,7 @@ import type { Champion, FightSummary, PromotionInfo, SimulationState, WorldEvent
 export function Dashboard() {
   const state = useApi<SimulationState>('/simulation/state');
   const champions = useApi<Champion[]>('/champions');
-  const events = useApi<WorldEvent[]>('/events?limit=18');
+  const events = useApi<WorldEvent[]>('/activity?limit=18');
   const promotions = useApi<PromotionInfo[]>('/promotions');
   const fights = useApi<FightSummary[]>('/fights?limit=8');
 

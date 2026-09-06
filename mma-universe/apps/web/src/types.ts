@@ -186,6 +186,8 @@ export interface FightSummary {
   finishTime?: string;
   technique?: string;
   isTitleFight: boolean;
+  /** Which belt was on the line, when one was. */
+  titleType?: 'undisputed' | 'interim' | 'vacant' | 'unification';
   scheduledRounds: number;
   fightDate?: string;
 }
@@ -196,4 +198,65 @@ export interface FightDetail extends FightSummary {
   fighterB?: FighterSummary;
   events: FightEventWire[];
   scorecards: { judgeName: string; rounds: { round: number; a: number; b: number }[]; totalA: number; totalB: number }[];
+}
+
+export interface VenueInfo { id: string; name: string; city: string; country: string; capacity: number; prestige: number }
+
+export interface EventSummary {
+  id: string;
+  promotionId: string;
+  promotion?: string;
+  name: string;
+  date: string;
+  tier: string;
+  status: string;
+  venue?: VenueInfo;
+  boutCount: number;
+  headline?: string;
+  hasTitleFight: boolean;
+  attendance?: number;
+  ppvBuys?: number;
+  revenue?: number;
+}
+
+export interface EventDetail extends Omit<EventSummary, 'promotion'> {
+  promotion?: { id: string; name: string; shortName: string };
+  fights: (FightSummary & {
+    divisionName: string;
+    billing: string;
+    fighterA?: FighterSummary;
+    fighterB?: FighterSummary;
+    status: string;
+  })[];
+}
+
+export interface NewsArticleWire {
+  id: string;
+  published: string;
+  headline: string;
+  body: string;
+  category: string;
+  subjectId?: string;
+}
+
+export interface StorylineWire {
+  id: string;
+  kind: string;
+  title: string;
+  started: string;
+  status: string;
+  heat: number;
+  participants: string[];
+  participantNames: string[];
+  beats: { date: string; text: string }[];
+}
+
+export interface TitleWire {
+  divisionKey: string;
+  divisionName: string;
+  since?: string;
+  defences: number;
+  champion?: FighterSummary;
+  interimChampion?: FighterSummary;
+  lineage: { fighterId: string; name: string; from: string; to?: string; defences: number }[];
 }

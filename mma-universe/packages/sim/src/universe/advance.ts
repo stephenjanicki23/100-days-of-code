@@ -412,6 +412,8 @@ function recruitProspects(universe: Universe, date: SimDate, month: number, repo
   if (intake === 0) return;
 
   const openCamps = universe.state.camps.filter((c) => c.status !== 'closed');
+  // Nobody debuts under a name the world already knows.
+  const takenNames = new Set(universe.state.fighters.map((f) => `${f.firstName} ${f.lastName}`));
 
   for (let i = 0; i < intake; i++) {
     const definition = rng.pickWeighted(DIVISIONS.map((d) => [d, d.populationWeight] as const));
@@ -422,6 +424,7 @@ function recruitProspects(universe: Universe, date: SimDate, month: number, repo
       divisionKey: definition.key,
       // Debutants are young and, by definition, have realised very little of their ceiling.
       ageRange: [18, 23],
+      takenNames,
     });
 
     // A newcomer joins a room that will take them — generally a smaller one.

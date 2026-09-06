@@ -53,8 +53,18 @@ export interface MatchmakingContext {
  */
 const MINIMUM_TURNAROUND_DAYS = 105;
 
-/** How long a champion is left alone between defences. */
-const TITLE_DEFENCE_INTERVAL_DAYS = 200;
+/**
+ * How long a champion is left alone between defences.
+ *
+ * At 200 days, twelve divisions produced a champion "due" for practically every card, and
+ * every single show carried a belt — which devalues all of them. At 260 a little over half
+ * of cards have a title fight, which is about right, and champions still defend often enough
+ * that nobody goes stale.
+ */
+const TITLE_DEFENCE_INTERVAL_DAYS = 260;
+
+/** No card is dominated by one weight class. */
+const MAX_BOUTS_PER_DIVISION = 3;
 
 /**
  * Whether a fighter can be booked for a card on this date: signed, healthy by fight night,
@@ -346,6 +356,11 @@ export function makeMatches(context: MatchmakingContext, wanted: number): Matchm
       .filter((id): id is string => Boolean(id)),
   );
 
+  const perDivision = new Map<string, number>();
+  for (const proposal of proposals) {
+    perDivision.set(proposal.divisionKey, (perDivision.get(proposal.divisionKey) ?? 0) + 1);
+  }
+
   for (const divisionKey of rng.shuffle([...promotion.divisionKeys])) {
     const rankings = universe.rankingsFor(promotion.id, divisionKey);
     // A champion does not take a non-title fight. Letting them meant a titleholder was
@@ -371,7 +386,11 @@ export function makeMatches(context: MatchmakingContext, wanted: number): Matchm
       if (booked.has(candidate.a.id) || booked.has(candidate.b.id)) continue;
       // A bout nobody wants to see is worse than a shorter card.
       if (candidate.score < 18) continue;
+      // A card is a variety show. Filling greedily from the highest-scoring division put
+      // five bantamweight bouts on an eleven-fight card.
+      if ((perDivision.get(candidate.divisionKey) ?? 0) >= MAX_BOUTS_PER_DIVISION) break;
       proposals.push(candidate);
+      perDivision.set(candidate.divisionKey, (perDivision.get(candidate.divisionKey) ?? 0) + 1);
       booked.add(candidate.a.id);
       booked.add(candidate.b.id);
     }
