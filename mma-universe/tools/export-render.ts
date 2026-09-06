@@ -65,7 +65,7 @@ const timeline = buildTimeline(beats, a.id, b.id, 'CONDENSED', profiles);
 function meshesFor(palette: FighterPalette) {
   const parts: { material: string; data: ReturnType<typeof buildSkin> }[] = [
     { material: 'skin', data: buildSkin() },
-    { material: 'trunks', data: buildShorts() },
+    { material: 'trunks', data: buildShorts(palette.trunkLength) },
     { material: 'gloves', data: buildGloves() },
     { material: 'hair', data: buildHair(palette.hairStyle) },
     { material: 'eyes', data: buildFace() },

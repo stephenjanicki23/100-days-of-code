@@ -307,7 +307,11 @@ export function blob(
     for (let s = 0; s < segments; s++) {
       const a = r * (segments + 1) + s;
       const b = a + segments + 1;
-      indices.push(a, b, a + 1, a + 1, b, b + 1);
+      // Wound to match `tube`, so that every closed surface on the body encloses a positive
+      // volume. It did not: blobs came out inside out, which is invisible in the vertices and
+      // total on screen — the gloves, the hair, the beard, the eyes and the skull were all
+      // rendering as their own far sides.
+      indices.push(a, a + 1, b, a + 1, b + 1, b);
     }
   }
   return { positions, uvs, skinIndices, skinWeights, indices };
@@ -377,26 +381,57 @@ const NECK: Section[] = [
 /**
  * Trunks.
  *
- * Built as a waistband plus one loose tube per leg, and the leg tubes deliberately start
- * *above* the hip joint so they overlap both the band and each other. The first attempt was a
- * pelvis skirt with separate thigh tubes butted against it, which left a visible junction the
- * legs tore open the moment the fighter moved. Overlapping closed surfaces of the same
- * material read as one garment; abutting ones never do.
+ * The previous build was a waistband plus one loose tube per leg, on the reasoning that
+ * overlapping closed surfaces of the same material read as one garment. They do — but only
+ * where they actually overlap, and these did not: rendered on their own, with the fighter
+ * hidden, the shorts had two holes punched through the top of the front where the bottom edge
+ * of the band and the top edges of the leg tubes passed each other without meeting. On the
+ * fighter that is bare hip showing through the trunks, which is exactly what it looked like.
+ *
+ * The holes were the visible half of it. The whole garment was also inside out, and had been
+ * since it was written: `tube` winds its triangles in the order the sections are given, and
+ * these ran from the waistband down while every other tube on the body runs bottom to top.
+ * Backwards winding means the front faces are culled, so the trunks were rendering as their
+ * own far side with the fighter's hip showing through the middle — which is what "the trunks
+ * only cover part of them" actually was. Four separate attempts to find a gap in the geometry
+ * came back clean, because there was never a gap.
+ *
+ * Rebuilt so the hole cannot exist rather than so it happens not to: everything from waist to
+ * crotch is a single closed surface, the legs start well up inside it, and the sections run
+ * bottom to top like everything else. `winds every tube the same way round` in the tests holds
+ * the last of those, since it is invisible in the geometry and only shows on screen.
  */
-const SHORTS_BAND: Section[] = [
-  { bone: 'hips', at: 1.2, rx: 0.134, rz: 0.104, weights: { hips: 0.3, spine: 0.7 } },
-  { bone: 'hips', at: 0.8, rx: 0.152, rz: 0.119, weights: { hips: 0.75, spine: 0.25 } },
-  { bone: 'hips', at: 0.35, rx: 0.162, rz: 0.128, weights: { hips: 1 } },
+const SHORTS_SKIRT: Section[] = [
+  { bone: 'hips', at: -0.86, rx: 0.172, rz: 0.134, weights: { hips: 1 } },
+  { bone: 'hips', at: -0.46, rx: 0.184, rz: 0.143, weights: { hips: 1 } },
+  { bone: 'hips', at: 0.08, rx: 0.177, rz: 0.139, weights: { hips: 1 } },
+  { bone: 'hips', at: 0.58, rx: 0.164, rz: 0.129, weights: { hips: 0.9, spine: 0.1 } },
+  { bone: 'hips', at: 1.02, rx: 0.148, rz: 0.115, weights: { hips: 0.55, spine: 0.45 } },
+  { bone: 'hips', at: 1.34, rx: 0.131, rz: 0.101, weights: { hips: 0.25, spine: 0.75 } },
 ];
 
-const shortsLeg = (side: 'L' | 'R'): Section[] => [
-  { bone: `thigh${side}`, at: -0.34, rx: 0.142, rz: 0.126, weights: { hips: 0.9, [`thigh${side}`]: 0.1 } },
-  { bone: `thigh${side}`, at: -0.1, rx: 0.15, rz: 0.138, weights: { hips: 0.62, [`thigh${side}`]: 0.38 } },
-  { bone: `thigh${side}`, at: 0.16, rx: 0.147, rz: 0.14, weights: { hips: 0.25, [`thigh${side}`]: 0.75 } },
-  { bone: `thigh${side}`, at: 0.45, rx: 0.135, rz: 0.131, weights: { [`thigh${side}`]: 1 } },
-  { bone: `thigh${side}`, at: 0.6, rx: 0.116, rz: 0.113 },
-  { bone: `thigh${side}`, at: 0.64, rx: 0.101, rz: 0.099 },
-];
+/**
+ * How long the trunks are, from vale tudo shorts to Muay Thai.
+ *
+ * A card where every fighter wears identical shorts is its own tell — kit is most of how you
+ * tell two men apart at range. 0 is cut high on the thigh, 1 comes down toward the knee.
+ */
+export function shortsLeg(side: 'L' | 'R', length: number): Section[] {
+  const hem = 0.3 + Math.max(0, Math.min(1, length)) * 0.48;
+  const bone: Joint = `thigh${side}`;
+  return [
+    // Started up inside the skirt, so a leg begins where the skirt is still solid and cannot
+    // leave a seam whatever the two of them do as the fighter moves — but not so far up that
+    // the trunks have geometry level with the ribs, which is where they started.
+    { bone, at: -0.30, rx: 0.126, rz: 0.116, weights: { hips: 0.95, [bone]: 0.05 } },
+    { bone, at: -0.12, rx: 0.134, rz: 0.125, weights: { hips: 0.62, [bone]: 0.38 } },
+    { bone, at: 0.06, rx: 0.134, rz: 0.128, weights: { hips: 0.22, [bone]: 0.78 } },
+    { bone, at: hem * 0.55, rx: 0.129, rz: 0.124, weights: { [bone]: 1 } },
+    // The hem stands off the thigh, because cloth does.
+    { bone, at: hem, rx: 0.119, rz: 0.115 },
+    { bone, at: hem + 0.035, rx: 0.106, rz: 0.102 },
+  ];
+}
 
 const foot = (side: 'L' | 'R'): Section[] => [
   { bone: `foot${side}`, at: -0.15, rx: 0.042, rz: 0.05, weights: { [`foot${side}`]: 1 } },
@@ -546,7 +581,7 @@ function hairCap(sweep: number, tilt: number, segments = 24, rings = 12): MeshDa
     for (let s = 0; s < segments; s++) {
       const a = r * (segments + 1) + s;
       const b = a + segments + 1;
-      indices.push(a, b, a + 1, a + 1, b, b + 1);
+      indices.push(a, a + 1, b, a + 1, b + 1, b);
     }
   }
   return { positions, uvs, skinIndices, skinWeights, indices };
@@ -725,8 +760,12 @@ export function buildSkin(): MeshData {
   ]);
 }
 
-export function buildShorts(): MeshData {
-  return merge([tube(SHORTS_BAND, 16), tube(shortsLeg('L'), 14), tube(shortsLeg('R'), 14)]);
+export function buildShorts(length = 0.5): MeshData {
+  return merge([
+    tube(SHORTS_SKIRT, 18),
+    tube(shortsLeg('L', length), 16),
+    tube(shortsLeg('R', length), 16),
+  ]);
 }
 
 export function buildGloves(): MeshData {
@@ -734,4 +773,31 @@ export function buildGloves(): MeshData {
     blob('handL', 0.45, [0.055, 0.067, 0.059], [0, 0, 0.006], 14, 10),
     blob('handR', 0.45, [0.055, 0.067, 0.059], [0, 0, 0.006], 14, 10),
   ]);
+}
+
+/**
+ * Six times the signed volume enclosed by a mesh.
+ *
+ * Winding is the one property of a generated mesh that is completely invisible in the numbers
+ * and total on screen: an inside-out tube has every vertex in exactly the right place, and
+ * renders as its own far side with whatever is inside it showing through. The trunks were
+ * built backwards from the day they were written, and four separate probes for a gap in the
+ * geometry came back clean because there was no gap.
+ *
+ * The divergence theorem settles it in one number. A closed surface wound outward encloses a
+ * positive volume; wound inward, the same surface encloses a negative one.
+ */
+export function signedVolume(mesh: MeshData): number {
+  const { positions: p, indices } = mesh;
+  let total = 0;
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i]! * 3;
+    const b = indices[i + 1]! * 3;
+    const c = indices[i + 2]! * 3;
+    total +=
+      p[a]! * (p[b + 1]! * p[c + 2]! - p[b + 2]! * p[c + 1]!) -
+      p[a + 1]! * (p[b]! * p[c + 2]! - p[b + 2]! * p[c]!) +
+      p[a + 2]! * (p[b]! * p[c + 1]! - p[b + 1]! * p[c]!);
+  }
+  return total;
 }

@@ -203,7 +203,7 @@ export class FighterModel {
 
     const parts: [ReturnType<typeof buildSkin>, THREE.Material, boolean][] = [
       [buildSkin(), skin, true],
-      [buildShorts(), trunks, true],
+      [buildShorts(palette.trunkLength), trunks, true],
       [buildGloves(), gloves, true],
       [buildHair(palette.hairStyle), hair, false],
       [buildFace(), eyes, false],

@@ -31,6 +31,11 @@ const SHOTS: Record<string, { position: [number, number, number]; target: [numbe
   'three-quarter': { position: [0.42, 1.66, 0.48], target: [0, 1.59, 0], fov: 30 },
   profile: { position: [0.66, 1.62, 0.06], target: [0, 1.59, 0], fov: 30 },
   torso: { position: [0.5, 1.45, 1.5], target: [0, 1.25, 0], fov: 38 },
+  // The views that actually matter for how a fighter reads at fight distance.
+  full: { position: [1.5, 1.2, 2.4], target: [0, 0.95, 0], fov: 40 },
+  'full-front': { position: [0.05, 1.15, 2.9], target: [0, 0.95, 0], fov: 38 },
+  back: { position: [-0.6, 1.2, -2.6], target: [0, 0.95, 0], fov: 40 },
+  hips: { position: [0.35, 1.0, 1.25], target: [0, 0.82, 0], fov: 40 },
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -56,6 +61,18 @@ floor.receiveShadow = true;
 scene.add(floor);
 
 const fighter = new FighterModel(PALETTE_A);
+// ?only=trunks isolates one garment, which is the only way to see what a mesh is actually
+// doing when it is buried inside another one.
+const only = new URLSearchParams(location.search).get('only');
+if (only) {
+  fighter.root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    const isTrunks = material.color.getHex() === PALETTE_A.trunks;
+    mesh.visible = only === 'trunks' ? isTrunks : !isTrunks;
+  });
+}
 fighter.applyPose(resolvePose(CLIPS.stance_idle!.keys[0]!.pose));
 scene.add(fighter.root);
 
