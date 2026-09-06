@@ -26,7 +26,10 @@ import { REACTIONS, isGrounded, resolveClip, restPose } from './clips.ts';
 import type { ResolvedPose } from './blend.ts';
 import { blendPose, blendPoseShortest, ease, resolvePose, sampleClip } from './blend.ts';
 import { addLife, fatigueForRound } from './life.ts';
-import type { Vec3 } from './rig.ts';
+import { claimOf, isTotal, JOINT_REGION, FULL_MASK, REGIONS, type Region, type RegionMask } from './regions.ts';
+import { planFootwork, footAt, type FootPlan, type PathSample } from './footwork.ts';
+import { solveLeg, rotateY as rotateGround, eulerToMatrix, transposeApply, subtract } from './ik.ts';
+import { JOINT_NAMES, SKELETON, type Joint, type Vec3 } from './rig.ts';
 
 export type Pacing = 'CONDENSED' | 'REALTIME';
 
@@ -44,6 +47,21 @@ const TAIL = 1.5;
  * repeated a few hundred times a fight, is most of what reads as robotic.
  */
 const CARRY_OVER = 0.16;
+/**
+ * How long a beat takes to take the body over, by what kind of beat it is.
+ *
+ * A single blend time for everything is wrong in both directions: a stagger that eases in over
+ * a sixth of a second has no impact, and a takedown that snaps on in the same time has no
+ * weight. A body reacting to a shot it did not see moves faster than one deciding to move.
+ */
+const BLEND_EMERGENCY = 0.07;
+const BLEND_STRIKE = 0.15;
+const BLEND_GRAPPLE = 0.3;
+/** Strikes that flow out of the one before rather than starting again from guard. */
+const COMBO_GAP = 0.02;
+const COMBO_WINDOW = 0.9;
+/** How fast the two of them circle, in radians per beat of engagement. */
+const CIRCLE_RATE = 0.085;
 /** Phase offsets for the idle layer, so the two fighters are never breathing in lockstep. */
 const LIFE_PHASE = [0, 3.71] as const;
 /**
@@ -75,6 +93,17 @@ export interface TimelineBeat {
   readonly reactorId?: string;
   /** Lateral drift of the engagement, so a fight does not happen on one spot of canvas. */
   readonly centre: Vec3;
+  /**
+   * Which way round the pair are standing. Without this they face along a fixed axis all
+   * fight, which is not something two people circling each other ever do.
+   */
+  readonly facing: number;
+  /** How long this beat takes to take the body over. */
+  readonly blend: number;
+  /** How strongly this beat's clip claims each part of the body. */
+  readonly claim: RegionMask;
+  /** True when this beat flows out of the previous one — a combination, not a fresh start. */
+  readonly follows: boolean;
 }
 
 export interface Timeline {
@@ -83,6 +112,8 @@ export interface Timeline {
   readonly fighterA: string;
   readonly fighterB: string;
   readonly pacing: Pacing;
+  /** Where each fighter's feet are, planned once so that sampling stays pure. */
+  readonly footPlans: readonly [FootPlan, FootPlan];
 }
 
 /**
@@ -122,6 +153,22 @@ function centreFor(event: FightEventWire): Vec3 {
   return [Math.cos(phase) * radius, 0, Math.sin(phase) * radius * 0.6];
 }
 
+/** Which way round the pair are standing, drifting the way two fighters circle. */
+function facingFor(event: FightEventWire): number {
+  return event.sequence * CIRCLE_RATE + Math.sin(event.sequence * 0.031) * 0.5;
+}
+
+/** An emergency, a decision, or a commitment — each takes the body over at its own rate. */
+function blendFor(clipName: string, reaction: string, eventType: string): number {
+  if (eventType === 'KNOCKDOWN' || eventType === 'STUN' || reaction === 'STAGGER' || reaction === 'DROP') {
+    return BLEND_EMERGENCY;
+  }
+  if (isTotal(clipName)) return BLEND_GRAPPLE;
+  return BLEND_STRIKE;
+}
+
+const STRIKE_EVENTS = new Set(['STRIKE', 'SIGNIFICANT_STRIKE']);
+
 function positionOf(beat: AnimationBeatWire): FightPositionWire {
   return beat.directive.targetState;
 }
@@ -142,12 +189,23 @@ export function buildTimeline(
     const speed = directive.speed > 0 ? directive.speed : 1;
     const duration = clip.duration / speed;
 
+    // A second strike from the same fighter, straight after the first, is a combination — it
+    // leaves from wherever the last one recovered to rather than resetting to guard first.
+    const last = beats[beats.length - 1];
+    const follows =
+      last !== undefined &&
+      last.actorId !== undefined &&
+      last.actorId === directive.actorId &&
+      STRIKE_EVENTS.has(last.event.eventType) &&
+      STRIKE_EVENTS.has(event.eventType) &&
+      event.timestamp - last.event.timestamp < COMBO_WINDOW;
+
     const start =
       pacing === 'REALTIME'
         ? Math.max(event.timestamp, cursor + MIN_REALTIME_STEP)
         : index === 0
           ? 0
-          : cursor + CONDENSED_GAP;
+          : cursor + (follows ? COMBO_GAP : CONDENSED_GAP);
 
     const position = positionOf(entry);
     beats.push({
@@ -165,11 +223,43 @@ export function buildTimeline(
       actorId: directive.actorId,
       reactorId: directive.reactorId,
       centre: centreFor(event),
+      facing: facingFor(event),
+      blend: follows ? BLEND_EMERGENCY : blendFor(directive.clip, directive.reaction, event.eventType),
+      claim: isTotal(directive.clip) ? FULL_MASK : claimOf(clip),
+      follows,
     });
     cursor = start + duration;
   }
 
-  return { beats, duration: cursor + TAIL, fighterA, fighterB, pacing };
+  const partial: Timeline = {
+    beats,
+    duration: cursor + TAIL,
+    fighterA,
+    fighterB,
+    pacing,
+    footPlans: [{ steps: [], start: [[0, 0], [0, 0]] }, { steps: [], start: [[0, 0], [0, 0]] }],
+  };
+
+  // The gait is planned against the finished path, then attached — see `footwork.ts` for why
+  // it is planned rather than simulated frame by frame.
+  const path = samplePath(partial);
+  return { ...partial, footPlans: [planFootwork(path[0], 0), planFootwork(path[1], 0.5)] };
+}
+
+/** Samples where each fighter stands, at a fixed rate, for the footwork planner. */
+function samplePath(timeline: Timeline): [PathSample[], PathSample[]] {
+  const rate = 1 / 30;
+  const a: PathSample[] = [];
+  const b: PathSample[] = [];
+  for (let time = 0; time <= timeline.duration; time += rate) {
+    const beat = beatAt(timeline, time);
+    if (!beat) continue;
+    const duration = Math.max(beat.end - beat.start, 0.001);
+    const stance = stanceAt(timeline, beat, (time - beat.start) / duration);
+    a.push({ time, x: stance.a[0], z: stance.a[2], yaw: stance.yawA });
+    b.push({ time, x: stance.b[0], z: stance.b[2], yaw: stance.yawB });
+  }
+  return [a, b];
 }
 
 /* -------------------------------------------------------------------- sampling */
@@ -180,6 +270,14 @@ export interface FighterFrame {
   /** World position of the fighter's root, on the canvas. */
   readonly position: Vec3;
   readonly yaw: number;
+  /**
+   * How much of the legs the footwork got, after the action took its share. Exposed because
+   * it is the single most useful number for understanding why a fighter is or is not stepping
+   * — and because "why did the foot slide there" is otherwise unanswerable from outside.
+   */
+  readonly legFreedom: number;
+  /** How much of the idle layer applied: 1 at rest, lower mid-technique. */
+  readonly rest: number;
 }
 
 export interface Frame {
@@ -216,28 +314,47 @@ export function beatAt(timeline: Timeline, time: number): TimelineBeat | undefin
 
 const IDLE = resolvePose(restPose('STANDING', 'ACTOR'));
 
-/** Both fighters' poses within one beat, before any carry-over or idle layer. */
+/** Both fighters' poses within one beat, before carry-over, idle or footwork. */
 interface BeatPoses {
   readonly a: ResolvedPose;
   readonly b: ResolvedPose;
   /** How occupied each fighter is, 0 (mid-technique) to 1 (at rest). Scales the idle layer. */
   readonly aRest: number;
   readonly bRest: number;
+  /** What the action leaves the legs free to do, per fighter. */
+  readonly aLegs: number;
+  readonly bLegs: number;
 }
 
+/**
+ * Composes one beat as layers rather than as a pose.
+ *
+ * This is the change the whole rewrite turns on. A clip used to return all nineteen joints, so
+ * a fighter throwing a jab had the legs the jab clip specified and could not simultaneously be
+ * stepping, circling or shifting weight — every action was total, and total actions read as
+ * discrete states a body snaps between. Now a clip states a *claim* over each region, and
+ * whatever it does not claim is left to the stance underneath and to the footwork below that.
+ */
 function posesForBeat(timeline: Timeline, beat: TimelineBeat, time: number): BeatPoses {
   const duration = Math.max(beat.end - beat.start, 0.001);
   const u = (time - beat.start) / duration;
   const shared = beat.actorId === undefined;
 
-  const actorPose = sampleClip(beat.clip, u);
-  const reactorPose = shared ? actorPose : reactionPose(beat, time);
+  const actorBase = resolvePose(restPose(beat.position, 'ACTOR'));
+  const actorAction = sampleClip(beat.clip, u);
+  const actorPose = layer(actorBase, actorAction, beat.claim);
+
+  const reactorBase = resolvePose(restPose(beat.position, 'REACTOR'));
+  const reaction = reactionFor(beat, time);
+  const reactorPose = shared ? actorPose : layer(reactorBase, reaction.pose, reaction.claim);
 
   // A fighter mid-strike should not also be bouncing in their stance, so the idle layer is
   // damped in proportion to how close this frame is to the moment of the technique.
   const actorRest = Math.max(0.3, Math.min(1, Math.abs(u - beat.clip.impactAt) * 3));
-  const reacting = time >= beat.impactAt && time - beat.impactAt < beat.reaction.duration;
-  const reactorRest = shared ? actorRest : reacting ? 0.35 : 1;
+  const reactorRest = shared ? actorRest : reaction.active ? 0.35 : 1;
+
+  const actorLegs = 1 - beat.claim.LEGS;
+  const reactorLegs = shared ? actorLegs : 1 - reaction.claim.LEGS;
 
   const actorIsA = shared ? true : beat.actorId === timeline.fighterA;
   return {
@@ -245,45 +362,216 @@ function posesForBeat(timeline: Timeline, beat: TimelineBeat, time: number): Bea
     b: actorIsA ? reactorPose : actorPose,
     aRest: actorIsA ? actorRest : reactorRest,
     bRest: actorIsA ? reactorRest : actorRest,
+    aLegs: actorIsA ? actorLegs : reactorLegs,
+    bLegs: actorIsA ? reactorLegs : actorLegs,
   };
 }
 
+interface Reaction {
+  readonly pose: ResolvedPose;
+  readonly claim: RegionMask;
+  readonly active: boolean;
+}
+
 /**
- * Where the engagement sits, moving continuously.
+ * The defender's contribution.
  *
- * `beat.centre` is a step function — one value per beat — so using it directly teleported both
- * fighters to a new patch of canvas on every action. Treating it as the position reached by
- * the *end* of the beat, starting from where the previous beat left them, turns the same data
- * into footwork at about half a metre a second.
+ * Before the strike lands they are doing nothing in particular, so the reaction claims nothing
+ * and the stance shows through. From the impact it eases on, and off again if it outlives the
+ * beat — reactions are authored from a neutral stance, and a defender who is wobbling or
+ * already on the canvas is not standing in one.
  */
-function centreAt(
-  timeline: Timeline,
-  beat: TimelineBeat,
-  u: number,
-): { x: number; z: number; half: number } {
+function reactionFor(beat: TimelineBeat, time: number): Reaction {
+  const rest = resolvePose(restPose(beat.position, 'REACTOR'));
+  if (time < beat.impactAt) return { pose: rest, claim: EMPTY_CLAIM, active: false };
+
+  const into = time - beat.impactAt;
+  const duration = beat.reaction.duration;
+  if (into >= duration) return { pose: rest, claim: EMPTY_CLAIM, active: false };
+
+  const reacting = sampleClip(beat.reaction, into / duration);
+  const takeover = Math.min(1, into / REACTION_TAKEOVER);
+  const release = Math.min(1, (duration - into) / REACTION_RELEASE);
+  const strength = ease(Math.min(takeover, release));
+
+  const claim = claimOf(beat.reaction);
+  const scaled = {} as Record<Region, number>;
+  for (const region of REGIONS) scaled[region] = claim[region] * strength;
+
+  return { pose: blendPoseShortest(rest, reacting, strength), claim: scaled, active: true };
+}
+
+const EMPTY_CLAIM: RegionMask = { LEGS: 0, HIPS: 0, SPINE: 0, ARM_L: 0, ARM_R: 0, HEAD: 0 };
+
+/**
+ * Where the engagement sits and which way round the pair are standing.
+ *
+ * `centre`, `spacing` and `facing` are all step functions — one value per beat — so using them
+ * directly teleported both fighters on every action. Treating each as the value reached by the
+ * *end* of the beat, starting from where the previous beat left them, turns the same data into
+ * footwork and circling at about half a metre a second.
+ */
+interface Stance {
+  readonly a: Vec3;
+  readonly b: Vec3;
+  readonly yawA: number;
+  readonly yawB: number;
+  readonly half: number;
+}
+
+function stanceAt(timeline: Timeline, beat: TimelineBeat, u: number): Stance {
   const previous = timeline.beats[beat.index - 1];
   const from = previous ? previous.centre : beat.centre;
   const fromSpacing = previous ? previous.spacing : beat.spacing;
+  const fromFacing = previous ? previous.facing : beat.facing;
   const k = ease(Math.max(0, Math.min(1, u)));
+
+  const cx = from[0] + (beat.centre[0] - from[0]) * k;
+  const cz = from[2] + (beat.centre[2] - from[2]) * k;
+  const half = (fromSpacing + (beat.spacing - fromSpacing) * k) / 2;
+  const facing = fromFacing + (beat.facing - fromFacing) * k;
+
+  const near = rotateGround([0, 0, -half], facing);
+  const far = rotateGround([0, 0, half], facing);
   return {
-    x: from[0] + (beat.centre[0] - from[0]) * k,
-    z: from[2] + (beat.centre[2] - from[2]) * k,
-    half: (fromSpacing + (beat.spacing - fromSpacing) * k) / 2,
+    a: [cx + near[0], 0, cz + near[2]],
+    b: [cx + far[0], 0, cz + far[2]],
+    yawA: facing,
+    yawB: facing + Math.PI,
+    half,
   };
 }
 
+/** Blends an action over a base pose, region by region, according to the clip's claim. */
+function layer(base: ResolvedPose, action: ResolvedPose, mask: RegionMask): ResolvedPose {
+  const joints = {} as Record<Joint, Vec3>;
+  for (const joint of JOINT_NAMES) {
+    const weight = mask[JOINT_REGION[joint]];
+    const from = base.joints[joint];
+    const to = action.joints[joint];
+    joints[joint] =
+      weight >= 1
+        ? to
+        : weight <= 0
+          ? from
+          : [
+              from[0] + (to[0] - from[0]) * weight,
+              from[1] + (to[1] - from[1]) * weight,
+              from[2] + (to[2] - from[2]) * weight,
+            ];
+  }
+  // The hips carry the body, so their displacement follows whichever of the two lower-body
+  // claims is stronger — a kick lifts the fighter, a stance does not.
+  const weight = Math.max(mask.HIPS, mask.LEGS);
+  return {
+    joints,
+    offset: [
+      base.offset[0] + (action.offset[0] - base.offset[0]) * weight,
+      base.offset[1] + (action.offset[1] - base.offset[1]) * weight,
+      base.offset[2] + (action.offset[2] - base.offset[2]) * weight,
+    ],
+  };
+}
+
+const THIGH_LENGTH = SKELETON.thighL.length;
+const SHIN_LENGTH = SKELETON.shinL.length;
+const FOOT_JOINTS: readonly [Joint, Joint, Joint][] = [
+  ['thighL', 'shinL', 'footL'],
+  ['thighR', 'shinR', 'footR'],
+];
+
 /**
- * The whole frame, from the timeline and a clock. Pure: no state, no accumulation, so a
- * seek and a play arrive at identical frames — the idle layer included, because it is a
- * function of absolute time rather than of a random source.
+ * Solves the legs onto their planted foot positions.
+ *
+ * `freedom` is what the action clip has left over: a kick claims the legs outright and gets
+ * them, a jab claims almost none of them and the floor wins. Without this the legs would fight
+ * the technique, and a head kick would be delivered by a fighter standing flat-footed.
+ */
+function plantFeet(
+  pose: ResolvedPose,
+  root: Vec3,
+  yaw: number,
+  plan: FootPlan,
+  time: number,
+  freedom: number,
+): ResolvedPose {
+  if (freedom <= 0.02) return pose;
+
+  const joints = { ...pose.joints } as Record<Joint, Vec3>;
+  const hipsBase = SKELETON.hips.offset;
+  const hipsPosition: Vec3 = [
+    hipsBase[0] + pose.offset[0],
+    hipsBase[1] + pose.offset[1],
+    hipsBase[2] + pose.offset[2],
+  ];
+  const hipsRotation = eulerToMatrix(pose.joints.hips);
+
+  for (const [index, bones] of FOOT_JOINTS.entries()) {
+    const foot = footAt(plan, index as 0 | 1, time);
+    // World, then the fighter's own space, then the hip's, then the thigh's.
+    const local = rotateGround([foot.x - root[0], foot.y - root[1], foot.z - root[2]], -yaw);
+    const fromHips = transposeApply(hipsRotation, subtract(local, hipsPosition));
+    const thighOffset = SKELETON[bones[0]].offset;
+    const target = subtract(fromHips, thighOffset);
+
+    const solved = solveLeg(target, THIGH_LENGTH, SHIN_LENGTH);
+    for (const [slot, bone] of [bones[0], bones[1]].entries()) {
+      const current = joints[bone];
+      const wanted = slot === 0 ? solved.thigh : solved.shin;
+      joints[bone] = [
+        current[0] + (wanted[0] - current[0]) * freedom,
+        current[1] + (wanted[1] - current[1]) * freedom,
+        current[2] + (wanted[2] - current[2]) * freedom,
+      ];
+    }
+
+    // Keep the sole roughly on the floor, and roll onto the toe through a step.
+    const ankle = joints[bones[0]][0] + joints[bones[1]][0];
+    const flat = -ankle + foot.swing * 0.55;
+    const current = joints[bones[2]];
+    joints[bones[2]] = [current[0] + (flat - current[0]) * freedom * 0.8, current[1], current[2]];
+  }
+
+  return { joints, offset: pose.offset };
+}
+
+/**
+ * Turns the head toward the opponent.
+ *
+ * A clip can leave the head pointing wherever the technique took it, and the idle layer drifts
+ * it further. Neither knows there is another person in the cage. This pulls it back, softly and
+ * within limits — a head mechanically locked on target is its own kind of robotic.
+ */
+function trackOpponent(pose: ResolvedPose, strength: number): ResolvedPose {
+  if (strength <= 0) return pose;
+  const joints = { ...pose.joints } as Record<Joint, Vec3>;
+  const limit = 0.42;
+  for (const [joint, share] of [['neck', 0.35], ['head', 0.65]] as const) {
+    const current = joints[joint];
+    const pull = Math.max(-limit, Math.min(limit, -current[1])) * strength * share;
+    joints[joint] = [current[0], current[1] + pull, current[2]];
+  }
+  return { joints, offset: pose.offset };
+}
+
+/**
+ * The whole frame, from the timeline and a clock.
+ *
+ * Pure: no state, no accumulation, so a seek and a play arrive at identical frames — the idle
+ * layer and the footwork included, because both are functions of absolute time rather than of
+ * anything that accumulates.
+ *
+ * The order of the layers is the design. Stance, then the action's claim over it, then
+ * carry-over from the previous beat, then the idle that never stops, then the head finding the
+ * opponent, and the feet solved onto the floor last so nothing above can slide them.
  */
 export function sampleFrame(timeline: Timeline, time: number): Frame {
   const beat = beatAt(timeline, time);
   if (!beat) {
     return {
       time,
-      a: { id: timeline.fighterA, pose: IDLE, position: [0, 0, -0.81], yaw: 0 },
-      b: { id: timeline.fighterB, pose: IDLE, position: [0, 0, 0.81], yaw: Math.PI },
+      a: { id: timeline.fighterA, pose: IDLE, position: [0, 0, -0.81], yaw: 0, legFreedom: 1, rest: 1 },
+      b: { id: timeline.fighterB, pose: IDLE, position: [0, 0, 0.81], yaw: Math.PI, legFreedom: 1, rest: 1 },
       camera: 'WIDE',
       description: '',
       round: 1,
@@ -297,83 +585,77 @@ export function sampleFrame(timeline: Timeline, time: number): Frame {
 
   let poses = posesForBeat(timeline, beat, time);
 
-  // Take over from wherever the previous beat left the body, rather than cutting to this
-  // clip's opening stance.
+  // Take over from wherever the previous beat left the body, over a window that depends on
+  // what kind of beat this is: an emergency reaction arrives faster than a decision.
   const previous = timeline.beats[beat.index - 1];
-  if (previous && elapsed < CARRY_OVER) {
+  if (previous && elapsed < beat.blend) {
     const tail = posesForBeat(timeline, previous, previous.end);
-    const alpha = ease(elapsed / CARRY_OVER);
+    const alpha = ease(elapsed / beat.blend);
     poses = {
       a: blendPoseShortest(tail.a, poses.a, alpha),
       b: blendPoseShortest(tail.b, poses.b, alpha),
       aRest: tail.aRest + (poses.aRest - tail.aRest) * alpha,
       bRest: tail.bRest + (poses.bRest - tail.bRest) * alpha,
+      aLegs: tail.aLegs + (poses.aLegs - tail.aLegs) * alpha,
+      bLegs: tail.bLegs + (poses.bLegs - tail.bLegs) * alpha,
     };
   }
 
   const fatigue = fatigueForRound(beat.event.round);
-  const aPose = addLife(poses.a, {
-    time,
-    phase: LIFE_PHASE[0],
-    intensity: poses.aRest,
-    fatigue,
-    grounded: beat.grounded,
-  });
-  const bPose = addLife(poses.b, {
-    time,
-    phase: LIFE_PHASE[1],
-    intensity: poses.bRest,
-    fatigue,
-    grounded: beat.grounded,
-  });
+  const stance = stanceAt(timeline, beat, u);
 
-  const { x: cx, z: cz, half } = centreAt(timeline, beat, u);
+  const sides = [
+    { pose: poses.a, rest: poses.aRest, legs: poses.aLegs, root: stance.a, yaw: stance.yawA, plan: timeline.footPlans[0] },
+    { pose: poses.b, rest: poses.bRest, legs: poses.bLegs, root: stance.b, yaw: stance.yawB, plan: timeline.footPlans[1] },
+  ] as const;
+
+  const finished = sides.map((side, index) => {
+    let pose = addLife(side.pose, {
+      time,
+      phase: LIFE_PHASE[index] ?? 0,
+      intensity: side.rest,
+      fatigue,
+      grounded: beat.grounded,
+    });
+    pose = trackOpponent(pose, beat.grounded ? 0 : 0.55 * side.rest);
+    if (!beat.grounded) {
+      pose = plantFeet(pose, side.root, side.yaw, side.plan, time, side.legs);
+    }
+    return pose;
+  });
 
   /**
    * On the canvas the fighters are not side by side, they are stacked. The poses each assume
    * they are the only body in the scene, so the renderer lifts whoever is working — the actor
    * of a takedown or a ground strike is by definition the one on top — clear of the fighter
-   * underneath. Without it two bodies occupy the same half-metre and read as one.
+   * underneath.
    */
   const shared = beat.actorId === undefined;
   const actorIsA = shared ? true : beat.actorId === timeline.fighterA;
   const lift = beat.grounded && !shared ? 0.22 : 0;
-  const aLift = actorIsA ? lift : 0;
-  const bLift = actorIsA ? 0 : lift;
 
   return {
     time,
     beat,
-    a: { id: timeline.fighterA, pose: aPose, position: [cx, aLift, cz - half], yaw: 0 },
-    b: { id: timeline.fighterB, pose: bPose, position: [cx, bLift, cz + half], yaw: Math.PI },
+    a: {
+      id: timeline.fighterA,
+      pose: finished[0]!,
+      position: [stance.a[0], actorIsA ? lift : 0, stance.a[2]],
+      yaw: stance.yawA,
+      legFreedom: poses.aLegs,
+      rest: poses.aRest,
+    },
+    b: {
+      id: timeline.fighterB,
+      pose: finished[1]!,
+      position: [stance.b[0], actorIsA ? 0 : lift, stance.b[2]],
+      yaw: stance.yawB,
+      legFreedom: poses.bLegs,
+      rest: poses.bRest,
+    },
     camera: beat.camera,
     description: beat.event.description,
     round: beat.event.round,
     roundTime: beat.event.roundTime,
   };
-}
-
-/**
- * The defender's pose. Before the strike lands they hold the position's rest pose; from the
- * impact they play the reaction, blending back out. Timing the reaction to the actor clip's
- * own `impactAt` rather than to the start of the beat is what keeps a head snapping back on
- * the frame the glove arrives instead of as the punch is thrown.
- */
-function reactionPose(beat: TimelineBeat, time: number): ResolvedPose {
-  const rest = resolvePose(restPose(beat.position, 'REACTOR'));
-  if (time < beat.impactAt) return rest;
-
-  const into = time - beat.impactAt;
-  const duration = beat.reaction.duration;
-  if (into >= duration) return rest;
-
-  const reacting = sampleClip(beat.reaction, into / duration);
-  // On the ground the rest pose dominates, because a reaction authored standing means little
-  // once the fighter is underneath someone.
-  const target = beat.grounded ? blendPose(rest, reacting, 0.35) : reacting;
-
-  // Ease the reaction on from wherever the body was, and off again if it outlives the beat.
-  const takeover = Math.min(1, into / REACTION_TAKEOVER);
-  const release = Math.min(1, (duration - into) / REACTION_RELEASE);
-  return blendPoseShortest(rest, target, ease(Math.min(takeover, release)));
 }

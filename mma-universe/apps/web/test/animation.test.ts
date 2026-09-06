@@ -283,11 +283,21 @@ describe('Sprint 19 — a exchange, driven only by the event stream', () => {
     const frame = sampleFrame(timeline, timeline.beats[0]!.start + 0.1);
     // Punching range: a fighter reaches about 0.65 m past their own shoulder, so centres
     // more than about 1.4 m apart would have every strike stopping short of the target.
-    const gap = Math.abs(frame.a.position[2] - frame.b.position[2]);
+    const gap = Math.hypot(
+      frame.a.position[0] - frame.b.position[0],
+      frame.a.position[2] - frame.b.position[2],
+    );
     expect(gap).toBeGreaterThan(0.9);
     expect(gap).toBeLessThan(1.4);
-    expect(frame.a.yaw).toBe(0);
-    expect(frame.b.yaw).toBeCloseTo(Math.PI);
+
+    // The pair circle, so neither yaw is fixed — what must hold is that they stay opposed,
+    // and that each is looking along the line to the other.
+    expect(Math.abs(Math.sin(frame.a.yaw - frame.b.yaw))).toBeLessThan(1e-6);
+    const toOpponent = Math.atan2(
+      frame.b.position[0] - frame.a.position[0],
+      frame.b.position[2] - frame.a.position[2],
+    );
+    expect(Math.abs(Math.sin(frame.a.yaw - toOpponent))).toBeLessThan(1e-6);
   });
 
   it('runs the whole exchange in a few seconds and never leaves a gap', () => {
