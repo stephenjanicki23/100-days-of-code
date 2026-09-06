@@ -11,7 +11,18 @@ available in real time on an integrated GPU. They are entirely available if the 
 rendered once, on a CPU, and played back as video.
 
 Usage:
-    python3 tools/render_blender.py <render.json> <out-dir> [--samples N] [--width W]
+    python3 tools/render_blender.py <render.json> <out-dir> [options]
+
+Options:
+    --samples N     Ceiling on samples per pixel. Adaptive sampling stops well below it on
+                    most pixels, so this is a limit rather than a cost. Default 96.
+    --width W       Horizontal resolution; height follows at 16:9. Default 1280.
+    --threshold T   Adaptive sampling noise threshold. Higher stops sooner. Default 0.01.
+    --bounces N     Ceiling on light bounces. Default 6, unchanged from before these flags
+                    existed — lowering it is a speed lever, but it changes the image, so it
+                    is not lowered by default until that trade has actually been looked at.
+    --frames A:B    Render only frames [A, B). For splitting an animation across processes.
+    --no-dof        Turn off depth of field.
 """
 
 from __future__ import annotations
@@ -327,11 +338,24 @@ def main() -> None:
     payload_path, out_dir = sys.argv[1], sys.argv[2]
     samples = 96
     width = 1280
+    threshold = 0.01
+    bounces = 6
+    frame_range = None
+    use_dof = True
     for i, arg in enumerate(sys.argv):
         if arg == '--samples':
             samples = int(sys.argv[i + 1])
         if arg == '--width':
             width = int(sys.argv[i + 1])
+        if arg == '--threshold':
+            threshold = float(sys.argv[i + 1])
+        if arg == '--bounces':
+            bounces = int(sys.argv[i + 1])
+        if arg == '--frames':
+            start, end = sys.argv[i + 1].split(':')
+            frame_range = (int(start), int(end))
+        if arg == '--no-dof':
+            use_dof = False
 
     with open(payload_path) as handle:
         payload = json.load(handle)
@@ -344,9 +368,15 @@ def main() -> None:
     scene.cycles.device = 'CPU'
     scene.cycles.samples = samples
     scene.cycles.use_denoising = True
-    scene.cycles.max_bounces = 6
+    scene.cycles.use_adaptive_sampling = True
+    scene.cycles.adaptive_threshold = threshold
+    scene.cycles.max_bounces = bounces
     scene.cycles.caustics_reflective = False
     scene.cycles.caustics_refractive = False
+    # The arena, the fence and the lights are identical in every frame of an animation, and
+    # only about 4,600 vertices move. Off — as it was — Cycles discards the scene and rebuilds
+    # every acceleration structure once per frame regardless.
+    scene.render.use_persistent_data = True
     scene.render.resolution_x = width
     scene.render.resolution_y = int(width * 9 / 16)
     scene.render.film_transparent = False
@@ -372,7 +402,7 @@ def main() -> None:
 
     camera_data = bpy.data.cameras.new('camera')
     camera_data.sensor_fit = 'VERTICAL'
-    camera_data.dof.use_dof = True
+    camera_data.dof.use_dof = use_dof
     camera_data.dof.aperture_fstop = 2.8
     camera = bpy.data.objects.new('camera', camera_data)
     scene.collection.objects.link(camera)
@@ -386,7 +416,10 @@ def main() -> None:
     constraint.up_axis = 'UP_Y'
     camera_data.dof.focus_object = target
 
-    for number, frame in enumerate(payload['frames']):
+    frames = list(enumerate(payload['frames']))
+    if frame_range:
+        frames = frames[frame_range[0]:frame_range[1]]
+    for number, frame in frames:
         for index, parts in enumerate(fighters):
             pose = frame['fighters'][index]
             skin = rig.skin_matrices(pose['rotations'], pose['offset'])
