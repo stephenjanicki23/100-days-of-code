@@ -8,6 +8,12 @@
  */
 
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import type { Frame, Timeline } from './player.ts';
 import { sampleFrame } from './player.ts';
 import { FighterModel, PALETTE_A, PALETTE_B } from './skeleton.ts';
@@ -33,6 +39,9 @@ export class FightViewer {
   private readonly desiredPosition = new THREE.Vector3();
   private readonly desiredTarget = new THREE.Vector3();
   private readonly observer: ResizeObserver;
+  private readonly composer: EffectComposer;
+  private readonly bloom: UnrealBloomPass;
+  private readonly environment: THREE.Texture;
 
   private timeline?: Timeline;
   private raf = 0;
@@ -52,17 +61,53 @@ export class FightViewer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.setClearColor(0x080a0f, 1);
+    this.renderer.setClearColor(0x05070b, 1);
+    /**
+     * Filmic tone mapping rather than the linear default.
+     *
+     * Untonemapped output is the single loudest tell of a synthetic render: highlights clip to
+     * flat white and everything below them sits in a narrow band, which is exactly why the
+     * first pass looked like moulded plastic. ACES rolls the highlights off the way a camera
+     * does, so a bright light on skin reads as a bright light rather than as a hole.
+     */
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.72;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
 
-    this.scene.fog = new THREE.Fog(0x080a0f, 12, 30);
+    this.scene.fog = new THREE.Fog(0x05070b, 10, 26);
+
+    /**
+     * Image-based lighting, generated rather than downloaded.
+     *
+     * Punctual lights alone leave everything they do not hit perfectly black, which no real
+     * room does — surfaces pick up bounce from every direction. `RoomEnvironment` is a crude
+     * box of emitters that three.js pre-filters into an environment map, and it is the single
+     * biggest step from "shaded primitives" toward "photographed object", because it is what
+     * gives a material something to reflect.
+     */
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environment = this.environment;
+    this.scene.environmentIntensity = 0.16;
+    pmrem.dispose();
+
     this.arena = buildArena();
     this.scene.add(this.arena.group);
     this.disposeLighting = buildLighting(this.scene);
     this.scene.add(this.fighterA.root, this.fighterB.root);
+
+    // A little bloom on the cage lights, then antialiasing, then tone mapping and colour
+    // conversion last — OutputPass reads the renderer's settings, so it must close the chain.
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.7, 0.92);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new SMAAPass());
+    this.composer.addPass(new OutputPass());
 
     this.camera.position.set(2.9, 2.5, 4.6);
     this.camera.lookAt(this.cameraTarget);
@@ -78,6 +123,8 @@ export class FightViewer {
     this.lastWidth = width;
     this.lastHeight = height;
     this.renderer.setSize(width, height, false);
+    this.composer?.setSize(width, height);
+    this.bloom?.setSize(width, height);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
   }
@@ -199,7 +246,7 @@ export class FightViewer {
     this.camera.updateProjectionMatrix();
     this.camera.lookAt(this.cameraTarget);
 
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
     this.options.onFrame?.(frame);
   }
 
@@ -211,6 +258,8 @@ export class FightViewer {
     this.arena.dispose();
     this.fighterA.dispose();
     this.fighterB.dispose();
+    this.environment.dispose();
+    this.composer.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

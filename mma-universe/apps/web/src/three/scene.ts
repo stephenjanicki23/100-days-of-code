@@ -7,6 +7,7 @@
  */
 
 import * as THREE from 'three';
+import { surfaceNoise } from './textures.ts';
 
 export const CAGE_RADIUS = 4.55;
 export const FENCE_HEIGHT = 1.83;
@@ -46,8 +47,16 @@ export function buildArena(): Arena {
   shape.closePath();
 
   const canvasGeometry = track(new THREE.ShapeGeometry(shape));
+  const noise = surfaceNoise();
   const canvasMaterial = track(
-    new THREE.MeshStandardMaterial({ color: 0xa7aeba, roughness: 0.95, metalness: 0 }),
+    new THREE.MeshStandardMaterial({
+      color: 0x6e757f,
+      roughness: 0.94,
+      metalness: 0,
+      roughnessMap: noise,
+      bumpMap: noise,
+      bumpScale: 0.004,
+    }),
   );
   const canvas = new THREE.Mesh(canvasGeometry, canvasMaterial);
   canvas.rotation.x = -Math.PI / 2;
@@ -56,7 +65,9 @@ export function buildArena(): Arena {
 
   // The apron the cage sits on, so the canvas does not float in the dark.
   const apronGeometry = track(new THREE.CylinderGeometry(CAGE_RADIUS + 1.1, CAGE_RADIUS + 1.4, 0.9, 8, 1));
-  const apronMaterial = track(new THREE.MeshStandardMaterial({ color: 0x16181f, roughness: 1 }));
+  const apronMaterial = track(
+    new THREE.MeshStandardMaterial({ color: 0x101319, roughness: 1, roughnessMap: noise }),
+  );
   const apron = new THREE.Mesh(apronGeometry, apronMaterial);
   apron.position.y = -0.46;
   apron.rotation.y = Math.PI / 8;
@@ -75,7 +86,9 @@ export function buildArena(): Arena {
 
   // Posts.
   const postGeometry = track(new THREE.CylinderGeometry(0.075, 0.075, FENCE_HEIGHT + 0.16, 10));
-  const postMaterial = track(new THREE.MeshStandardMaterial({ color: 0x2a2f3a, roughness: 0.6, metalness: 0.3 }));
+  const postMaterial = track(
+    new THREE.MeshStandardMaterial({ color: 0x23272f, roughness: 0.45, metalness: 0.55, roughnessMap: noise }),
+  );
   for (const corner of corners) {
     const post = new THREE.Mesh(postGeometry, postMaterial);
     post.position.set(corner.x, (FENCE_HEIGHT + 0.16) / 2, corner.y);
@@ -132,35 +145,58 @@ export function buildArena(): Arena {
 }
 
 export function buildLighting(scene: THREE.Scene): () => void {
-  const ambient = new THREE.HemisphereLight(0x8695b2, 0x0b0d12, 0.42);
+  /**
+   * Lighting motivated by the room rather than by taste.
+   *
+   * An arena hangs a bank of hard lights directly over the cage: that is what gives fighters
+   * their pooled highlights, short shadows straight down, and a dark surround. Four spots in a
+   * square over the canvas do the same job here, and the environment map supplies the bounce
+   * that punctual lights alone cannot.
+   */
+  const ambient = new THREE.HemisphereLight(0x6d7c99, 0x07090d, 0.12);
   scene.add(ambient);
 
-  const key = new THREE.DirectionalLight(0xfff6ea, 2.6);
-  key.position.set(3.4, 9.5, 4.2);
+  const key = new THREE.DirectionalLight(0xfff2e0, 1.5);
+  key.position.set(2.6, 10.5, 3.4);
   key.castShadow = true;
-  key.shadow.mapSize.set(1024, 1024);
-  key.shadow.camera.near = 1;
-  key.shadow.camera.far = 26;
-  key.shadow.camera.left = -7;
-  key.shadow.camera.right = 7;
-  key.shadow.camera.top = 7;
-  key.shadow.camera.bottom = -7;
-  key.shadow.bias = -0.0012;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.camera.near = 2;
+  key.shadow.camera.far = 22;
+  key.shadow.camera.left = -5.5;
+  key.shadow.camera.right = 5.5;
+  key.shadow.camera.top = 5.5;
+  key.shadow.camera.bottom = -5.5;
+  key.shadow.bias = -0.0009;
+  key.shadow.normalBias = 0.02;
+  key.shadow.radius = 2;
   scene.add(key);
 
-  const rimA = new THREE.SpotLight(0x6f97ff, 18, 22, Math.PI / 5, 0.7, 1.5);
-  rimA.position.set(-7, 6.5, -6);
-  scene.add(rimA);
+  const bank: THREE.SpotLight[] = [];
+  for (const [x, z] of [
+    [-3.2, -3.2],
+    [3.2, -3.2],
+    [-3.2, 3.2],
+    [3.2, 3.2],
+  ] as const) {
+    const lamp = new THREE.SpotLight(0xfff4e6, 11, 16, Math.PI / 4.6, 0.55, 1.6);
+    lamp.position.set(x, 7.4, z);
+    lamp.target.position.set(x * 0.25, 1, z * 0.25);
+    scene.add(lamp, lamp.target);
+    bank.push(lamp);
+  }
 
-  const rimB = new THREE.SpotLight(0xff8a6a, 12, 22, Math.PI / 5, 0.7, 1.5);
-  rimB.position.set(7.5, 6, -5.5);
-  scene.add(rimB);
+  // One cool kicker from behind — what separates a body from a black background on camera.
+  const rim = new THREE.SpotLight(0x9dbcff, 14, 20, Math.PI / 5, 0.7, 1.5);
+  rim.position.set(-6.5, 4.6, -5.2);
+  rim.target.position.set(0, 1.1, 0);
+  scene.add(rim, rim.target);
 
   return () => {
-    scene.remove(ambient, key, rimA, rimB);
+    scene.remove(ambient, key, rim, rim.target);
+    for (const lamp of bank) scene.remove(lamp, lamp.target);
     key.dispose();
-    rimA.dispose();
-    rimB.dispose();
+    rim.dispose();
+    for (const lamp of bank) lamp.dispose();
   };
 }
 

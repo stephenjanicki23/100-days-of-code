@@ -25,6 +25,7 @@ import {
 import { CLIPS, REACTIONS, applyVariant, isGrounded, resolveClip, restPose } from '../src/three/clips.ts';
 import { CAMERA_PRESETS } from '../src/three/camera.ts';
 import { JOINT_NAMES, JOINT_ORDER, SKELETON, type Joint } from '../src/three/rig.ts';
+import { buildGloves, buildShorts, buildSkin, restOrigin } from '../src/three/body.ts';
 import { angularDelta, resolvePose, sampleClip, type ResolvedPose } from '../src/three/blend.ts';
 import { buildTimeline, sampleFrame } from '../src/three/player.ts';
 import { MAX_JOINT_OFFSET, addLife, fatigueForRound } from '../src/three/life.ts';
@@ -555,5 +556,91 @@ describe('Sprint 19 — the idle layer stays an idle layer', () => {
     const spent = addLife(rest, { ...options, fatigue: 1, time: 5 });
     // A positive rotation on a DOWN limb lets it hang, so a tired guard sits lower.
     expect(spent.joints.armL[0]!).toBeGreaterThan(fresh.joints.armL[0]!);
+  });
+});
+
+describe('Sprint 20 — the body mesh is well formed', () => {
+  const parts = { skin: buildSkin(), shorts: buildShorts(), gloves: buildGloves() };
+
+  it('gives every vertex bone influences that sum to one', () => {
+    for (const [name, part] of Object.entries(parts)) {
+      const count = part.positions.length / 3;
+      expect(part.skinWeights.length, name).toBe(count * 4);
+      for (let v = 0; v < count; v++) {
+        const sum =
+          part.skinWeights[v * 4]! +
+          part.skinWeights[v * 4 + 1]! +
+          part.skinWeights[v * 4 + 2]! +
+          part.skinWeights[v * 4 + 3]!;
+        expect(sum, `${name} vertex ${v}`).toBeCloseTo(1, 5);
+      }
+    }
+  });
+
+  it('only ever weights a vertex to a bone that exists', () => {
+    for (const [name, part] of Object.entries(parts)) {
+      for (const index of part.skinIndices) {
+        expect(index, name).toBeGreaterThanOrEqual(0);
+        expect(index, name).toBeLessThan(JOINT_NAMES.length);
+      }
+    }
+  });
+
+  it('builds closed, finite geometry', () => {
+    for (const [name, part] of Object.entries(parts)) {
+      const count = part.positions.length / 3;
+      expect(count, name).toBeGreaterThan(100);
+      for (const value of part.positions) expect(Number.isFinite(value), name).toBe(true);
+      expect(part.indices.length % 3, `${name} is not triangulated`).toBe(0);
+      for (const index of part.indices) {
+        expect(index, name).toBeGreaterThanOrEqual(0);
+        expect(index, name).toBeLessThan(count);
+      }
+      expect(part.uvs.length, name).toBe(count * 2);
+    }
+  });
+
+  it('is shaped like a person, at human scale', () => {
+    const skin = parts.skin;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let maxX = 0;
+    for (let v = 0; v < skin.positions.length / 3; v++) {
+      const x = Math.abs(skin.positions[v * 3]!);
+      const y = skin.positions[v * 3 + 1]!;
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+      maxX = Math.max(maxX, x);
+    }
+    // Standing on the canvas, a shade under six foot, and no wider than a real pair of
+    // shoulders — a bad section radius shows up here rather than on screen.
+    expect(minY).toBeGreaterThan(-0.06);
+    expect(minY).toBeLessThan(0.08);
+    expect(maxY).toBeGreaterThan(1.7);
+    expect(maxY).toBeLessThan(1.95);
+    expect(maxX).toBeLessThan(0.42);
+  });
+
+  it('puts the head above the shoulders and the trunks around the hips', () => {
+    const highest = (data: { positions: number[] }) =>
+      Math.max(...Array.from({ length: data.positions.length / 3 }, (_, v) => data.positions[v * 3 + 1]!));
+    const lowest = (data: { positions: number[] }) =>
+      Math.min(...Array.from({ length: data.positions.length / 3 }, (_, v) => data.positions[v * 3 + 1]!));
+
+    expect(highest(parts.skin)).toBeGreaterThan(highest(parts.shorts));
+    expect(lowest(parts.shorts)).toBeGreaterThan(0.5);
+    expect(highest(parts.shorts)).toBeLessThan(1.15);
+  });
+
+  it('places a bone origin where the rig says it is', () => {
+    // The generator walks the skeleton itself, so a drift here means the mesh and the pose
+    // layer disagree about where the body is — which no screenshot would make obvious.
+    const [, hipY] = restOrigin('hips');
+    expect(hipY).toBeCloseTo(SKELETON.hips.offset[1], 6);
+    const [, chestY] = restOrigin('chest');
+    expect(chestY).toBeCloseTo(
+      SKELETON.hips.offset[1] + SKELETON.hips.length + SKELETON.spine.length,
+      6,
+    );
   });
 });
