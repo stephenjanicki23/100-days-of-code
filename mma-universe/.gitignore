@@ -7,3 +7,4 @@ dist/
 *.sqlite-shm
 data/*.db
 .DS_Store
+dist-artifact/

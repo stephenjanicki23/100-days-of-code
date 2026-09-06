@@ -37,6 +37,8 @@ export class FightViewer {
   private timeline?: Timeline;
   private raf = 0;
   private lastTick = 0;
+  private lastWidth = 0;
+  private lastHeight = 0;
   private time = 0;
   private rate = 1;
   private running = false;
@@ -73,6 +75,8 @@ export class FightViewer {
   private resize(): void {
     const width = Math.max(this.container.clientWidth, 1);
     const height = Math.max(this.container.clientHeight, 1);
+    this.lastWidth = width;
+    this.lastHeight = height;
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
@@ -140,6 +144,15 @@ export class FightViewer {
    */
   renderAt(time: number, snapCamera = false, delta = 0): void {
     if (this.disposed || !this.timeline) return;
+    // A ResizeObserver can measure before an aspect-ratio box has resolved, which leaves the
+    // drawing buffer a different shape from the element and letterboxes the render inside
+    // itself. Cheap to re-check every frame; the setter is a no-op when nothing moved.
+    if (
+      this.renderer.domElement.clientWidth !== this.lastWidth ||
+      this.renderer.domElement.clientHeight !== this.lastHeight
+    ) {
+      this.resize();
+    }
     const frame = sampleFrame(this.timeline, time);
 
     this.fighterA.applyPose(frame.a.pose);
