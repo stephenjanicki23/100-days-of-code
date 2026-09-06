@@ -334,7 +334,7 @@ export function merge(parts: readonly MeshData[]): MeshData {
 /* ------------------------------------------------------------------ the body */
 
 const arm = (side: 'L' | 'R'): Section[] => [
-  { bone: `shoulder${side}`, at: 0.1, rx: 0.07, rz: 0.068, weights: { [`shoulder${side}`]: 1 }, lobes: deltoid(side) },
+  { bone: `shoulder${side}`, at: -0.35, rx: 0.073, rz: 0.071, weights: { chest: 0.45, [`shoulder${side}`]: 0.55 }, lobes: deltoid(side) },
   { bone: `shoulder${side}`, at: 1, rx: 0.062, rz: 0.06, weights: { [`shoulder${side}`]: 0.5, [`arm${side}`]: 0.5 }, lobes: deltoid(side) },
   { bone: `arm${side}`, at: 0.3, rx: 0.057, rz: 0.055, weights: { [`arm${side}`]: 1 }, lobes: upperArm(side) },
   { bone: `arm${side}`, at: 0.75, rx: 0.046, rz: 0.045, lobes: upperArm(side).map((l) => ({ ...l, amount: l.amount * 0.4 })) },
@@ -362,20 +362,23 @@ const leg = (side: 'L' | 'R'): Section[] => [
  * are deep, because people are.
  */
 const TORSO: Section[] = [
-  { bone: 'hips', at: 0, rx: 0.112, rz: 0.086, weights: { hips: 1 }, lobes: GLUTES },
-  { bone: 'hips', at: 0.55, rx: 0.122, rz: 0.092, lobes: [...GLUTES, SPINE_GROOVE] },
-  { bone: 'hips', at: 1, rx: 0.118, rz: 0.088, weights: { hips: 0.55, spine: 0.45 }, lobes: [...ABS, SPINE_GROOVE] },
+  { bone: 'hips', at: -0.62, rx: 0.104, rz: 0.084, weights: { hips: 1 }, lobes: GLUTES },
+  { bone: 'hips', at: -0.2, rx: 0.128, rz: 0.098, weights: { hips: 1 }, lobes: GLUTES },
+  { bone: 'hips', at: 0.2, rx: 0.137, rz: 0.103, weights: { hips: 1 }, lobes: GLUTES },
+  { bone: 'hips', at: 0.55, rx: 0.143, rz: 0.106, lobes: [...GLUTES, SPINE_GROOVE] },
+  { bone: 'hips', at: 1, rx: 0.132, rz: 0.096, weights: { hips: 0.55, spine: 0.45 }, lobes: [...ABS, SPINE_GROOVE] },
   { bone: 'spine', at: 0.35, rx: 0.113, rz: 0.083, weights: { spine: 1 }, lobes: [...ABS, SPINE_GROOVE] },
   { bone: 'spine', at: 0.75, rx: 0.138, rz: 0.096, lobes: [...LATS, SPINE_GROOVE, { at: FRONT, spread: 0.5, amount: 0.03 }] },
   { bone: 'spine', at: 1, rx: 0.152, rz: 0.104, weights: { spine: 0.5, chest: 0.5 }, lobes: [...PECS, ...LATS, SPINE_GROOVE] },
   { bone: 'chest', at: 0.5, rx: 0.163, rz: 0.11, weights: { chest: 1 }, lobes: [...PECS, ...LATS, SPINE_GROOVE] },
   { bone: 'chest', at: 0.88, rx: 0.15, rz: 0.101, lobes: [...TRAPS, { at: FRONT, spread: 0.6, amount: 0.03 }] },
-  { bone: 'chest', at: 1.05, rx: 0.115, rz: 0.09, weights: { chest: 0.75, neck: 0.25 }, lobes: TRAPS },
+  { bone: 'chest', at: 1.05, rx: 0.132, rz: 0.098, weights: { chest: 0.75, neck: 0.25 }, lobes: TRAPS },
 ];
 
 const NECK: Section[] = [
-  { bone: 'neck', at: -0.4, rx: 0.062, rz: 0.06, weights: { chest: 0.4, neck: 0.6 } },
-  { bone: 'neck', at: 0.6, rx: 0.055, rz: 0.054, weights: { neck: 1 } },
+  { bone: 'neck', at: -0.55, rx: 0.075, rz: 0.072, weights: { chest: 0.55, neck: 0.45 } },
+  { bone: 'neck', at: 0.1, rx: 0.068, rz: 0.065, weights: { neck: 1 } },
+  { bone: 'neck', at: 0.75, rx: 0.062, rz: 0.06, weights: { neck: 1 } },
 ];
 
 /**
@@ -748,22 +751,42 @@ export function toneAt(point: readonly [number, number, number]): [number, numbe
   return [1 + warm * 0.55 + lift, 1 - warm * 0.16 + lift, 1 - warm * 0.42 + lift];
 }
 
+/**
+ * The ball of the shoulder.
+ *
+ * The arm tube begins at the shoulder joint and the torso ends at the chest, and in the bind
+ * pose the two just barely touch. Raise the arm into a guard — which is where it spends the
+ * fight — and they stop touching: the arm swings away as a separate cylinder with its capped
+ * end showing, leaving a flat flange of torso behind it. That is most of what read as spindly
+ * and stuck together, and no amount of thickening the arm fixes it, because the arm was never
+ * the thin part.
+ *
+ * A ball at the joint, overlapping both, is the whole fix. It is what a deltoid is.
+ */
+function deltoidBall(side: 'L' | 'R'): MeshData {
+  return blob(`shoulder${side}`, 0.2, [0.086, 0.09, 0.084], [side === 'L' ? -0.026 : 0.026, 0.006, 0], 18, 14);
+}
+
 /** Skin: everything the eye reads as the athlete. */
 export function buildSkin(): MeshData {
   return merge([
-    tube(TORSO),
-    tube(NECK, 12),
+    // Rounder than they were. At fourteen segments a torso this wide is visibly faceted, and
+    // the flat panels read as armour plating rather than a back.
+    tube(TORSO, 22),
+    tube(NECK, 16),
+    deltoidBall('L'),
+    deltoidBall('R'),
     // A nose and a mouth are a few millimetres across on a head this size; at 22 segments they
     // were being averaged away by the very grid meant to carry them.
     blob('head', HEAD_AT, HEAD_RADII, HEAD_OFFSET, 48, 40, skullShape),
     ear('L'),
     ear('R'),
-    tube(arm('L'), 12),
-    tube(arm('R'), 12),
-    tube(leg('L'), 14),
-    tube(leg('R'), 14),
-    tube(foot('L'), 10),
-    tube(foot('R'), 10),
+    tube(arm('L'), 18),
+    tube(arm('R'), 18),
+    tube(leg('L'), 20),
+    tube(leg('R'), 20),
+    tube(foot('L'), 14),
+    tube(foot('R'), 14),
   ]);
 }
 

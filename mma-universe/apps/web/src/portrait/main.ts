@@ -69,8 +69,13 @@ if (only) {
     const mesh = node as THREE.Mesh;
     if (!mesh.isMesh) return;
     const material = mesh.material as THREE.MeshStandardMaterial;
-    const isTrunks = material.color.getHex() === PALETTE_A.trunks;
-    mesh.visible = only === 'trunks' ? isTrunks : !isTrunks;
+    const hex = material.color.getHex();
+    const kind =
+      hex === PALETTE_A.trunks ? 'trunks' :
+      hex === PALETTE_A.gloves ? 'gloves' :
+      hex === PALETTE_A.hair ? 'hair' :
+      hex === PALETTE_A.skin ? 'skin' : 'other';
+    mesh.visible = only.split(',').includes(kind);
   });
 }
 fighter.applyPose(resolvePose(CLIPS.stance_idle!.keys[0]!.pose));
