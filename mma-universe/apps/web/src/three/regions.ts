@@ -139,3 +139,26 @@ export function warmMasks(): void {
   for (const clip of Object.values(CLIPS)) claimOf(clip);
   for (const clip of Object.values(REACTIONS)) claimOf(clip);
 }
+
+/**
+ * How far each region lags the hips, in seconds.
+ *
+ * A punch is a chain: the hips turn, the torso follows, the shoulder follows that, and the arm
+ * arrives last. Animating every joint off the same clock makes the whole body move as one
+ * rigid piece, which is a large part of why keyframed figures read as mechanical even when the
+ * poses themselves are good.
+ *
+ * The lag is small — a few frames — and deliberately asymmetric between the arms, because the
+ * limb doing the work leads and the guard hand trails it.
+ */
+export const REGION_LAG: Readonly<Record<Region, number>> = {
+  HIPS: 0,
+  LEGS: 0.006,
+  SPINE: 0.022,
+  ARM_L: 0.048,
+  ARM_R: 0.048,
+  HEAD: 0.034,
+};
+
+/** The longest lag any region carries, for callers that need to bound their sampling. */
+export const MAX_LAG = Math.max(...Object.values(REGION_LAG));

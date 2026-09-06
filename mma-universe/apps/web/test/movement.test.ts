@@ -12,7 +12,8 @@ import { Rng, generateUniverse, mapEventToAnimation, simulateFight, type FightEv
 
 import { buildTimeline, sampleFrame, type Frame } from '../src/three/player.ts';
 import { footAt, ANKLE_HEIGHT } from '../src/three/footwork.ts';
-import { claimOf, isTotal } from '../src/three/regions.ts';
+import { claimOf, isTotal, JOINT_REGION, REGION_LAG } from '../src/three/regions.ts';
+import { sampleClipChained } from '../src/three/blend.ts';
 import { CLIPS } from '../src/three/clips.ts';
 import { SKELETON } from '../src/three/rig.ts';
 import { apply, eulerToMatrix, legTip, rotateY } from '../src/three/ik.ts';
@@ -298,5 +299,59 @@ describe('damage reactions depend on where the strike landed', () => {
       expect(beat.reaction, beat.reactionName).toBeTruthy();
       expect(beat.reaction.duration).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('secondary motion — the body moves as a chain', () => {
+  it('turns the hips before the hand arrives', () => {
+    /**
+     * A punch travels through the body: hips, torso, shoulder, hand. Animating every joint off
+     * the same clock makes the whole figure move as one rigid piece, which is much of why
+     * keyframed characters read as mechanical even when the poses are good.
+     *
+     * Measured as: at the moment the hips are moving fastest, the arm should not yet be.
+     */
+    const clip = CLIPS.strike_cross!;
+    const duration = clip.duration;
+    const speedOf = (joint: 'hips' | 'forearmR', u: number) => {
+      const before = sampleClipChained(clip, u - 0.01, duration, REGION_LAG, JOINT_REGION);
+      const after = sampleClipChained(clip, u + 0.01, duration, REGION_LAG, JOINT_REGION);
+      let total = 0;
+      for (let axis = 0; axis < 3; axis++) {
+        total += Math.abs(after.joints[joint][axis]! - before.joints[joint][axis]!);
+      }
+      return total;
+    };
+
+    let hipPeak = 0;
+    let hipPeakAt = 0;
+    let armPeak = 0;
+    let armPeakAt = 0;
+    for (let u = 0.05; u < 0.95; u += 0.01) {
+      const hips = speedOf('hips', u);
+      const arm = speedOf('forearmR', u);
+      if (hips > hipPeak) {
+        hipPeak = hips;
+        hipPeakAt = u;
+      }
+      if (arm > armPeak) {
+        armPeak = arm;
+        armPeakAt = u;
+      }
+    }
+    expect(hipPeakAt, 'the hips must lead the hand').toBeLessThan(armPeakAt);
+  });
+
+  it('does not lag the hips against themselves', () => {
+    expect(REGION_LAG.HIPS).toBe(0);
+    // Nothing should trail by more than a few frames, or the body comes apart.
+    for (const value of Object.values(REGION_LAG)) expect(value).toBeLessThan(0.07);
+  });
+
+  it('is still deterministic with the chain applied', () => {
+    const clip = CLIPS.strike_cross!;
+    const once = sampleClipChained(clip, 0.4, clip.duration, REGION_LAG, JOINT_REGION);
+    const twice = sampleClipChained(clip, 0.4, clip.duration, REGION_LAG, JOINT_REGION);
+    expect(once).toEqual(twice);
   });
 });

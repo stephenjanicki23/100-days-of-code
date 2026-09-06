@@ -162,3 +162,36 @@ export function sampleClip(clip: Clip, u: number): ResolvedPose {
   }
   return resolvePose(last.pose);
 }
+
+/**
+ * Samples a clip with each region running slightly behind the hips.
+ *
+ * Motion travels through a body rather than arriving everywhere at once: the hips turn first
+ * and the hand lands last. Sampling each region a few frames earlier in the clip produces that
+ * chain for free, out of animation that was authored without it — and it costs one extra
+ * lookup per region rather than a rewrite of every clip.
+ */
+export function sampleClipChained(
+  clip: Clip,
+  u: number,
+  duration: number,
+  lag: Readonly<Record<string, number>>,
+  regionOf: Readonly<Record<Joint, string>>,
+): ResolvedPose {
+  const cache = new Map<number, ResolvedPose>();
+  const at = (offset: number): ResolvedPose => {
+    let pose = cache.get(offset);
+    if (!pose) {
+      pose = sampleClip(clip, u - offset / Math.max(duration, 1e-4));
+      cache.set(offset, pose);
+    }
+    return pose;
+  };
+
+  const joints = {} as Record<Joint, Vec3>;
+  for (const joint of JOINT_NAMES) {
+    joints[joint] = at(lag[regionOf[joint]] ?? 0).joints[joint];
+  }
+  // The hips carry the body, so the displacement is theirs and does not lag.
+  return { joints, offset: at(0).offset };
+}

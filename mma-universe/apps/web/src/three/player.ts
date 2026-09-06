@@ -24,9 +24,18 @@ import type { AnimationBeatWire, CameraHint, FightEventWire, FightPositionWire }
 import type { Clip } from './clips.ts';
 import { REACTIONS, isGrounded, resolveClip, restPose } from './clips.ts';
 import type { ResolvedPose } from './blend.ts';
-import { blendPose, blendPoseShortest, ease, resolvePose, sampleClip } from './blend.ts';
+import { blendPose, blendPoseShortest, ease, resolvePose, sampleClip, sampleClipChained } from './blend.ts';
 import { addLife, fatigueForRound, feintAt, staggerAt } from './life.ts';
-import { claimOf, isTotal, JOINT_REGION, FULL_MASK, REGIONS, type Region, type RegionMask } from './regions.ts';
+import {
+  claimOf,
+  isTotal,
+  JOINT_REGION,
+  FULL_MASK,
+  REGIONS,
+  REGION_LAG,
+  type Region,
+  type RegionMask,
+} from './regions.ts';
 import { planFootwork, footAt, type FootPlan, type PathSample } from './footwork.ts';
 import type { MovementProfile } from '../types.ts';
 import { solveLeg, rotateY as rotateGround, eulerToMatrix, transposeApply, subtract } from './ik.ts';
@@ -408,7 +417,8 @@ function posesForBeat(timeline: Timeline, beat: TimelineBeat, time: number): Bea
   const shared = beat.actorId === undefined;
 
   const actorBase = resolvePose(restPose(beat.position, 'ACTOR'));
-  const actorAction = sampleClip(beat.clip, u);
+  // Sampled as a chain rather than all at once: hips first, the hand last.
+  const actorAction = sampleClipChained(beat.clip, u, duration, REGION_LAG, JOINT_REGION);
   const actorPose = layer(actorBase, actorAction, beat.claim);
 
   const reactorBase = resolvePose(restPose(beat.position, 'REACTOR'));
