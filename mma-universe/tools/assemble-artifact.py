@@ -75,6 +75,9 @@ def main() -> None:
     head = head.replace('{{VIDEO}}', data_uri(film, 'video/webm'))
     head = head.replace('{{POSTER}}', data_uri(poster, 'image/jpeg'))
     head = head.replace('{{PLATES}}', ''.join(plates))
+    compare = SCRATCH / 'compare.webm'
+    if compare.exists():
+        head = head.replace('{{COMPARE}}', data_uri(compare, 'video/webm'))
 
     data = json.loads((SCRATCH / 'fights.json').read_text())
     payload = json.dumps(data, separators=(',', ':')).replace('<', '\\u003c')
