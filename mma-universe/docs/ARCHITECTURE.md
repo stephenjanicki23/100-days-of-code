@@ -290,6 +290,60 @@ The mapping registry lives in `packages/sim/src/viz` because it is pure data and
 testable without a game engine. Unreal/Unity consume it over the wire as JSON; the engine-side
 work is then only clip playback and blending.
 
+### 8.1 The reference renderer (Sprint 19)
+
+The renderer that exists today is a browser one, built on three.js and living in `apps/web/src/three`.
+It was chosen over Unreal for a reason worth recording: Unreal is free, but it cannot be built
+or verified in this environment, and a renderer nobody can run is a claim rather than a test.
+The browser renderer can be screenshotted, so the acceptance criterion — an exchange driven
+purely by the event stream — is something the build checks rather than something the design
+asserts.
+
+What matters architecturally is that it consumes `/fights/:id/events?format=animation` **and
+nothing else**. It does not import `@mma/sim`; it mirrors the wire types in `apps/web/src/types.ts`
+and talks HTTP, which is precisely the position an Unreal client would be in. The coupling is
+verified in one place, `apps/web/test/animation.test.ts`, which imports both sides and fails if
+the engine can name a clip the renderer cannot play.
+
+| Module | Imports three.js | Responsibility |
+| --- | --- | --- |
+| `rig.ts` | no | Skeleton specification: 19 joints, offsets, bone lengths |
+| `poses.ts` | no | The pose vocabulary — sparse joint rotations, authored by hand |
+| `clips.ts` | no | The clip library: every name in `requiredClips()`, as keyframes |
+| `blend.ts` | no | Pose resolution, blending and clip sampling |
+| `player.ts` | no | The timeline: beats, spacing, reaction timing, `sampleFrame` |
+| `camera.ts` | no | Framing presets, one per `CameraHint` |
+| `skeleton.ts` | yes | Builds the joint hierarchy and pushes poses into it |
+| `scene.ts` | yes | Cage, canvas, lighting |
+| `viewer.ts` | yes | The render loop and transport |
+
+The split is deliberate: everything that decides *what the fighters do* is free of three.js, so
+the choreography is a pure function of `(timeline, t)` and every frame is reproducible in a node
+test with no GPU. Seeking and playing produce identical frames because nothing accumulates.
+
+**Animation data, not animation assets.** There are no downloaded models, textures or motion
+captures — 56 clips are authored as keyframes over a pose vocabulary, and the fighters are built
+from capsules and boxes. That keeps the project free of any asset licence and keeps the
+animations reviewable in a diff. The cost is honest: the figures read as stylised, and ground
+grappling in particular looks tangled, because two poses that each assume they are the only body
+in the scene will interpenetrate without inverse kinematics. Swapping in a rigged glTF character
+means replacing `skeleton.ts` and nothing else, since what it consumes is joint rotations, which
+any humanoid rig accepts.
+
+**Three defects the tests now guard**, all found by rendering rather than by reading:
+
+- Spinning techniques unwound backwards on recovery, because a keyframe pair more than half a
+  turn apart interpolates the short way. The clip-shape test rejects any such pair.
+- A capsule whose radius exceeded half its length is silently collapsed to a sphere by three.js,
+  which put a ball on the fighter's chest. The skeleton test rejects that ratio.
+- The wheel kick landed pointing away from the opponent. The raised leg sits about 0.93 rad off
+  the fighter's own forward, so it only reaches the target once the hips have come the whole way
+  round — the clip now ends past 2*pi rather than back at zero.
+
+Striking range is derived rather than chosen: a fully extended arm puts the glove about 0.81 m
+past the fighter's own root, so standing separation is 1.05 m. At the 1.6 m the first pass used,
+every punch stopped visibly short.
+
 ---
 
 ## 9. Database design (§28)

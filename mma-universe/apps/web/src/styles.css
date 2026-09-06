@@ -195,3 +195,61 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 60px; }
 .spark span { flex: 1; background: var(--accent-dim); border-radius: 1px 1px 0 0; min-width: 2px; }
 .spark span.last { background: var(--accent); }
+
+/* ---------------------------------------------------------------- 3D viewer */
+
+.viewer { margin-top: 16px; }
+
+.viewer-controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
+
+.viewer-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 340px;
+  background: #080a0f;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.viewer-hud {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  pointer-events: none;
+}
+.viewer-hud-top { top: 0; background: linear-gradient(#0009, #0000); }
+.viewer-hud-bottom { bottom: 0; background: linear-gradient(#0000, #000a); }
+
+.viewer-corner { flex: 1; font-weight: 600; letter-spacing: 0.01em; display: flex; align-items: center; gap: 8px; }
+.viewer-clock { font-family: var(--mono); font-size: 15px; color: var(--accent); white-space: nowrap; }
+.viewer-line { color: #e7ebf2; font-size: 14px; }
+
+.viewer-transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.viewer-transport input[type='range'] { flex: 1; accent-color: var(--accent); padding: 0; }
+.viewer-transport .viewer-time { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.viewer-transport select { padding: 6px 8px; }
+.viewer-transport button {
+  background: var(--panel-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.viewer-transport button:hover { border-color: var(--accent); color: #fff; }
+.viewer-transport button.primary { background: var(--accent-dim); border-color: var(--accent); min-width: 76px; }

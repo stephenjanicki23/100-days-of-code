@@ -1,6 +1,6 @@
 /** Shell: navigation, simulation controls, and the route table. */
 
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { advance, useApi } from './api.ts';
 import { navigate, useRoute } from './router.ts';
 import { Dashboard } from './pages/Dashboard.tsx';
@@ -11,6 +11,12 @@ import { Camps, CampDetail } from './pages/Camps.tsx';
 import { Events, EventDetailPage } from './pages/Events.tsx';
 import { News } from './pages/News.tsx';
 import { FightCenter } from './pages/FightCenter.tsx';
+
+/**
+ * The 3D viewer is the only page that needs three.js, and three.js is most of the bundle.
+ * Loading it on demand keeps the seven management screens at roughly a tenth of the weight.
+ */
+const FightViewer3D = lazy(async () => ({ default: (await import('./pages/FightViewer3D.tsx')).FightViewer3D }));
 import type { SimulationState } from './types.ts';
 
 const NAV = [
@@ -21,6 +27,7 @@ const NAV = [
   { path: 'camps', label: 'Camps' },
   { path: 'news', label: 'The Sport' },
   { path: 'fight-center', label: 'Fight Center' },
+  { path: 'fight-3d', label: 'Fight Viewer' },
 ];
 
 /** The simulation speeds of brief §30. */
@@ -84,6 +91,12 @@ function Screen({ segments }: { segments: readonly string[] }) {
       return <News />;
     case 'fight-center':
       return <FightCenter id={second} />;
+    case 'fight-3d':
+      return (
+        <Suspense fallback={<div className="center">Loading the renderer…</div>}>
+          <FightViewer3D id={second} />
+        </Suspense>
+      );
     default:
       return (
         <div className="center">

@@ -260,3 +260,66 @@ export interface TitleWire {
   interimChampion?: FighterSummary;
   lineage: { fighterId: string; name: string; from: string; to?: string; defences: number }[];
 }
+
+/* --------------------------------------------------- the 3D animation contract */
+
+/**
+ * Mirrors `@mma/sim`'s `viz/animation-map.ts`. It is copied rather than imported on purpose:
+ * the renderer consumes `/fights/:id/events?format=animation` over HTTP and knows nothing
+ * about the simulation package, which is the same position an Unreal or Unity client would
+ * be in. If these drift, `apps/web/test/animation.test.ts` fails.
+ */
+export type FightPositionWire =
+  | 'STANDING'
+  | 'CLINCH'
+  | 'CAGE_CLINCH'
+  | 'TAKEDOWN_ATTEMPT'
+  | 'GROUND_TOP'
+  | 'GROUND_BOTTOM'
+  | 'GUARD'
+  | 'HALF_GUARD'
+  | 'SIDE_CONTROL'
+  | 'MOUNT'
+  | 'BACK_CONTROL'
+  | 'SCRAMBLE'
+  | 'SUBMISSION_ATTEMPT'
+  | 'STUNNED'
+  | 'RECOVERY';
+
+export type CameraHint =
+  | 'WIDE'
+  | 'BROADCAST'
+  | 'CLOSE'
+  | 'IMPACT'
+  | 'GROUND_OVERHEAD'
+  | 'CAGE_SIDE'
+  | 'REPLAY'
+  | 'CORNER';
+
+export type HitReaction =
+  | 'NONE'
+  | 'LIGHT'
+  | 'HEAVY'
+  | 'STAGGER'
+  | 'DROP'
+  | 'BLOCK'
+  | 'SLIP'
+  | 'SPRAWL_DEFEND';
+
+export interface AnimationDirective {
+  clip: string;
+  variant: number;
+  targetState: FightPositionWire;
+  camera: CameraHint;
+  reaction: HitReaction;
+  speed: number;
+  triggersReplay: boolean;
+  actorId?: string;
+  reactorId?: string;
+}
+
+/** One entry of `/fights/:id/events?format=animation`. */
+export interface AnimationBeatWire {
+  event: FightEventWire;
+  directive: AnimationDirective;
+}
