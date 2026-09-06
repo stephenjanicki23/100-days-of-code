@@ -373,9 +373,13 @@ def main() -> None:
     scene.cycles.max_bounces = bounces
     scene.cycles.caustics_reflective = False
     scene.cycles.caustics_refractive = False
-    # The arena, the fence and the lights are identical in every frame of an animation, and
-    # only about 4,600 vertices move. Off — as it was — Cycles discards the scene and rebuilds
-    # every acceleration structure once per frame regardless.
+    # The arena, the fence and the lights are identical in every frame of an animation and only
+    # about 4,600 vertices move, so not rebuilding the scene every frame ought to be free
+    # speed. Measured over six frames it is worth nothing at all: 64.6s a frame before, 64.8s
+    # after. On a scene this small Cycles is sampling, not building acceleration structures,
+    # so there was never anything there to save. Kept because it costs nothing and would
+    # matter on a heavier set — but it is not the lever, and the next person should not spend
+    # an hour rediscovering that.
     scene.render.use_persistent_data = True
     scene.render.resolution_x = width
     scene.render.resolution_y = int(width * 9 / 16)
