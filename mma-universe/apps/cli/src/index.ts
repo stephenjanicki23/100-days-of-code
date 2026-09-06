@@ -125,6 +125,8 @@ function commandAdvance(args: Args): void {
   const started = Date.now();
   const report = advanceUniverse(universe, days);
   saveUniverse(db, universe, { snapshots: report.snapshots });
+  // Play-by-play is written per fight; the universe save only carries the bout's result.
+  for (const { fight, result } of report.fightResults) saveFight(db, fight, result);
 
   console.log(`\n  ${from} → ${universe.date}  (${Date.now() - started}ms)`);
   console.log(`  training weeks   ${report.trainingWeeks}`);
@@ -133,6 +135,13 @@ function commandAdvance(args: Args): void {
   console.log(`  debuts           ${report.debuts}`);
   console.log(`  camp moves       ${report.campMoves}`);
   console.log(`  camps closed     ${report.campsClosed}`);
+  const promotion = report.promotion;
+  console.log(`  events           ${promotion.eventsBooked} booked, ${promotion.eventsHeld} held`);
+  console.log(`  fights           ${promotion.fightsSimulated} (${promotion.titleFights} for a title, ${promotion.titleChanges} changed hands)`);
+  console.log(`  short notice     ${promotion.replacements} replacements, ${promotion.fightsCancelled} cancelled`);
+  console.log(`  contracts        +${promotion.contractsSigned} / -${promotion.contractsReleased}`);
+  console.log(`  news             ${promotion.articlesPublished} articles, ${promotion.storylinesStarted} storylines`);
+  console.log(`  revenue          $${(promotion.revenue / 1_000_000).toFixed(1)}M`);
 
   if (report.topRisers.length > 0) {
     console.log('\n  most improved in the final week:');

@@ -16,6 +16,7 @@ import type { Fight } from '../domain/fight.ts';
 import type { FightResult } from '../fight/engine.ts';
 import { createInjury, applyChronicCost } from '../development/injury.ts';
 import { buildDivisionRankings } from '../promotion/rankings.ts';
+import { crownChampion, promoteInterim, recordDefence } from '../promotion/titles.ts';
 import type { Universe } from './universe.ts';
 
 export interface ApplyFightOptions {
@@ -44,9 +45,12 @@ export function applyFightResult(
 
   // Captured before the result is applied, so a title fight can tell a defence from a change.
   const promotionId = a.promotionId ?? b.promotionId;
-  const championBefore = promotionId
-    ? universe.rankingsFor(promotionId, fight.divisionKey).find((entry) => entry.rank === 0)?.fighterId
-    : undefined;
+  const title = promotionId ? universe.title(promotionId, fight.divisionKey) : undefined;
+  const championBefore =
+    title?.championId ??
+    (promotionId
+      ? universe.rankingsFor(promotionId, fight.divisionKey).find((entry) => entry.rank === 0)?.fighterId
+      : undefined);
 
   fight.status = 'completed';
   fight.fightDate = date;
@@ -119,11 +123,23 @@ export function applyFightResult(
     winner.attributes.confidence = clamp(winner.attributes.confidence + 1.2, 1, 100);
     loser.attributes.confidence = clamp(loser.attributes.confidence - (method === 'ko' ? 2.4 : 1.2), 1, 100);
 
-    if (fight.isTitleFight) {
+    if (fight.isTitleFight && fight.titleType === 'interim' && title) {
+      // An interim belt does not dethrone anybody; it sits alongside the real one until the
+      // champion comes back and the two are unified.
+      title.interimChampionId = winner.id;
+      universe.record({
+        type: 'INTERIM_TITLE',
+        date,
+        subjectId: winner.id,
+        secondaryId: loser.id,
+        summary: `${winner.firstName} ${winner.lastName} is the interim champion, beating ${loser.firstName} ${loser.lastName}.`,
+      });
+    } else if (fight.isTitleFight) {
       // A champion who wins has defended; a challenger who wins has taken the belt. Reporting
       // every title-fight win as a new champion is wrong roughly half the time.
       if (championBefore === winner.id) {
         winner.career.titleDefenses++;
+        if (title) recordDefence(title);
         universe.record({
           type: 'TITLE_DEFENDED',
           date,
@@ -134,6 +150,7 @@ export function applyFightResult(
       } else {
         winner.career.titleReigns++;
         winner.career.titleDefenses = 0;
+        if (title) crownChampion(title, winner.id, date);
         universe.record({
           type: 'TITLE_CHANGE',
           date,
@@ -158,7 +175,8 @@ export function applyFightResult(
         (entry) => entry.promotionId === promotionId && entry.divisionKey === fight.divisionKey,
       );
       // The belt follows the result of a title fight, and is otherwise unaffected.
-      const championAfter = fight.isTitleFight && result.winnerId ? result.winnerId : championBefore;
+      const championAfter =
+        fight.isTitleFight && fight.titleType !== 'interim' && result.winnerId ? result.winnerId : championBefore;
       const rebuilt = buildDivisionRankings(
         promotion,
         fight.divisionKey,

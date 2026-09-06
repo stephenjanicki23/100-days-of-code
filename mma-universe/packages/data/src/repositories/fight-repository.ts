@@ -90,7 +90,7 @@ export function saveFight(db: Db, fight: Fight, result?: FightResult): void {
 
     db.prepare('DELETE FROM scorecard WHERE fight_id = ?').run(fight.id);
     const insertScore = db.prepare(
-      'INSERT INTO scorecard (fight_id, judge_name, round, score_a, score_b) VALUES (?, ?, ?, ?, ?)',
+      'INSERT OR REPLACE INTO scorecard (fight_id, judge_name, round, score_a, score_b) VALUES (?, ?, ?, ?, ?)',
     );
     for (const card of result.scorecards) {
       for (const roundScore of card.rounds) {

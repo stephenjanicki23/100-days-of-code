@@ -81,6 +81,7 @@ class UniverseService {
   advance(days: number) {
     const report = advanceUniverse(this.universe, days);
     saveUniverse(this.db, this.universe, { snapshots: report.snapshots });
+    for (const { fight, result } of report.fightResults) saveFight(this.db, fight, result);
     return report;
   }
 }

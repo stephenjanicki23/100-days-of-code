@@ -15,6 +15,12 @@ export interface Fight {
   boutOrder: number;
   billing: FightBilling;
   isTitleFight: boolean;
+  /**
+   * What is actually on the line. Distinguishing these matters: an interim belt is not the
+   * undisputed title, a vacant-title bout has no champion to dethrone, and a unification
+   * collapses two belts into one.
+   */
+  titleType?: 'undisputed' | 'interim' | 'vacant' | 'unification';
   scheduledRounds: number;
   status: FightStatus;
   fightDate?: SimDate;

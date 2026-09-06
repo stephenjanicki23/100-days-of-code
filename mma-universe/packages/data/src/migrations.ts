@@ -380,7 +380,50 @@ const CHRONIC_INJURIES = `
 ALTER TABLE injury ADD COLUMN chronic INTEGER NOT NULL DEFAULT 0;
 `;
 
+/**
+ * The promotion layer (Milestone 3): title records and their lineage, plus the columns the
+ * event and fight tables need now that cards are booked by the simulation rather than by
+ * hand. Titles are their own table because a championship is a fact about the world, not a
+ * position derived from the ranking table.
+ */
+const PROMOTION_LAYER = `
+CREATE TABLE title (
+  promotion_id        TEXT NOT NULL REFERENCES promotion (id) ON DELETE CASCADE,
+  division_key        TEXT NOT NULL REFERENCES division (key),
+  champion_id         TEXT REFERENCES fighter (id) ON DELETE SET NULL,
+  interim_champion_id TEXT REFERENCES fighter (id) ON DELETE SET NULL,
+  since               TEXT,
+  defences            INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (promotion_id, division_key)
+);
+
+/* Append-only: every reign a division has ever had. */
+CREATE TABLE title_reign (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  promotion_id TEXT NOT NULL,
+  division_key TEXT NOT NULL,
+  fighter_id   TEXT NOT NULL REFERENCES fighter (id) ON DELETE CASCADE,
+  from_date    TEXT NOT NULL,
+  to_date      TEXT,
+  defences     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_reign_division ON title_reign (promotion_id, division_key, from_date);
+
+ALTER TABLE event_card ADD COLUMN tier TEXT NOT NULL DEFAULT 'fight_night';
+ALTER TABLE event_card ADD COLUMN ppv_buys INTEGER;
+ALTER TABLE fight ADD COLUMN title_type TEXT;
+ALTER TABLE venue ADD COLUMN prestige REAL NOT NULL DEFAULT 50;
+
+CREATE TABLE storyline_beat (
+  storyline_id TEXT NOT NULL REFERENCES storyline (id) ON DELETE CASCADE,
+  beat_date    TEXT NOT NULL,
+  text         TEXT NOT NULL
+);
+CREATE INDEX idx_beat_storyline ON storyline_beat (storyline_id);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { id: 1, name: 'initial_schema', sql: INITIAL_SCHEMA },
   { id: 2, name: 'chronic_injuries', sql: CHRONIC_INJURIES },
+  { id: 3, name: 'promotion_layer', sql: PROMOTION_LAYER },
 ];

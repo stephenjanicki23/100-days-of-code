@@ -22,13 +22,19 @@ import {
   type Coach,
   type Contract,
   type DevelopmentSnapshot,
+  type Fight,
   type Fighter,
   type Injury,
+  type NewsArticle,
   type Personality,
   type Promotion,
+  type PromotionEvent,
   type RankingEntry,
   type SimulationEvent,
+  type Storyline,
+  type TitleRecord,
   type UniverseState,
+  type Venue,
 } from '@mma/sim';
 import type { Db } from '../database.ts';
 
@@ -153,7 +159,7 @@ export function saveUniverse(db: Db, universe: Universe, options: SaveOptions = 
     // `fighter` is conspicuously absent — see the note on FIGHTER_COLUMNS above.
     for (const table of [
       'ranking_entry', 'contract', 'injury', 'fighter_memory',
-      'camp_specialisation', 'coach', 'camp', 'promotion',
+      'title', 'camp_specialisation', 'coach', 'camp', 'promotion',
     ]) {
       db.prepare(`DELETE FROM ${table}`).run();
     }
@@ -230,6 +236,12 @@ export function saveUniverse(db: Db, universe: Universe, options: SaveOptions = 
     for (const fighter of state.fighters) {
       insertFighter.run(fighterRow(fighter));
 
+    }
+
+    // Injuries and memories go in a second pass, after every fighter row exists. A memory
+    // references the *opponent*, and inserting one inside the fighter loop fails the foreign
+    // key whenever the opponent happens to come later in the list.
+    for (const fighter of state.fighters) {
       for (const injury of fighter.condition.injuries) {
         insertInjury.run({ ...injury, endDate: injury.endDate ?? null, chronic: injury.chronic ? 1 : 0 });
       }
@@ -260,6 +272,121 @@ export function saveUniverse(db: Db, universe: Universe, options: SaveOptions = 
     );
     for (const entry of state.rankings) {
       insertRanking.run({ ...entry, previousRank: entry.previousRank ?? null });
+    }
+
+    // Venues and cards are upserted rather than replaced: an event that has already been
+    // fought is history, and the fights hanging off it must keep their foreign key.
+    const insertVenue = db.prepare(
+      `INSERT INTO venue (id, name, city, country, capacity, prestige)
+       VALUES (@id, @name, @city, @country, @capacity, @prestige)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, city = excluded.city,
+         country = excluded.country, capacity = excluded.capacity, prestige = excluded.prestige`,
+    );
+    for (const venue of state.venues) {
+      insertVenue.run({ id: venue.id, name: venue.name, city: venue.city, country: venue.country, capacity: venue.capacity, prestige: venue.prestige });
+    }
+
+    const insertCard = db.prepare(
+      `INSERT INTO event_card (id, promotion_id, name, event_date, venue_id, status, tier, attendance, ppv_buys, revenue)
+       VALUES (@id, @promotionId, @name, @date, @venueId, @status, @tier, @attendance, @ppvBuys, @revenue)
+       ON CONFLICT(id) DO UPDATE SET status = excluded.status, attendance = excluded.attendance,
+         ppv_buys = excluded.ppv_buys, revenue = excluded.revenue, name = excluded.name`,
+    );
+    for (const card of state.cards) {
+      insertCard.run({
+        id: card.id,
+        promotionId: card.promotionId,
+        name: card.name,
+        date: card.date,
+        venueId: card.venueId ?? null,
+        status: card.status,
+        tier: card.tier,
+        attendance: card.attendance ?? null,
+        ppvBuys: card.ppvBuys ?? null,
+        revenue: card.revenue ?? null,
+      });
+    }
+
+    const insertFight = db.prepare(
+      `INSERT INTO fight (id, event_id, division_key, fighter_a_id, fighter_b_id, bout_order, billing,
+         is_title_fight, title_type, scheduled_rounds, status, outcome, winner_id, finish_round, finish_time, technique, fight_date)
+       VALUES (@id, @eventId, @divisionKey, @fighterAId, @fighterBId, @boutOrder, @billing,
+         @isTitleFight, @titleType, @scheduledRounds, @status, @outcome, @winnerId, @finishRound, @finishTime, @technique, @fightDate)
+       ON CONFLICT(id) DO UPDATE SET
+         fighter_a_id = excluded.fighter_a_id, fighter_b_id = excluded.fighter_b_id,
+         status = excluded.status, outcome = excluded.outcome, winner_id = excluded.winner_id,
+         finish_round = excluded.finish_round, finish_time = excluded.finish_time,
+         technique = excluded.technique, fight_date = excluded.fight_date`,
+    );
+    for (const fight of state.fights) {
+      insertFight.run({
+        id: fight.id,
+        eventId: fight.eventId ?? null,
+        divisionKey: fight.divisionKey,
+        fighterAId: fight.fighterAId,
+        fighterBId: fight.fighterBId,
+        boutOrder: fight.boutOrder,
+        billing: fight.billing,
+        isTitleFight: fight.isTitleFight ? 1 : 0,
+        titleType: fight.titleType ?? null,
+        scheduledRounds: fight.scheduledRounds,
+        status: fight.status,
+        outcome: fight.outcome ?? null,
+        winnerId: fight.winnerId ?? null,
+        finishRound: fight.finishRound ?? null,
+        finishTime: fight.finishTime ?? null,
+        technique: fight.technique ?? null,
+        fightDate: fight.fightDate ?? null,
+      });
+    }
+
+    const insertTitle = db.prepare(
+      `INSERT INTO title (promotion_id, division_key, champion_id, interim_champion_id, since, defences)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    // The lineage is append-only history, rewritten as a unit because reigns close out as
+    // they end rather than being inserted once and never touched.
+    db.prepare('DELETE FROM title_reign').run();
+    const insertReign = db.prepare(
+      'INSERT INTO title_reign (promotion_id, division_key, fighter_id, from_date, to_date, defences) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    for (const title of state.titles) {
+      insertTitle.run(
+        title.promotionId, title.divisionKey, title.championId ?? null,
+        title.interimChampionId ?? null, title.since ?? null, title.defences,
+      );
+      for (const reign of title.lineage) {
+        insertReign.run(title.promotionId, title.divisionKey, reign.fighterId, reign.from, reign.to ?? null, reign.defences);
+      }
+    }
+
+    const insertArticle = db.prepare(
+      `INSERT INTO news_article (id, published, headline, body, category, subject_id, storyline_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+    );
+    for (const article of state.news) {
+      insertArticle.run(article.id, article.published, article.headline, article.body, article.category, article.subjectId ?? null, article.storylineId ?? null);
+    }
+
+    const insertStoryline = db.prepare(
+      `INSERT INTO storyline (id, kind, title, started, ended, status, participants, heat)
+       VALUES (@id, @kind, @title, @started, @ended, @status, @participants, @heat)
+       ON CONFLICT(id) DO UPDATE SET ended = excluded.ended, status = excluded.status, heat = excluded.heat`,
+    );
+    const insertBeat = db.prepare('INSERT INTO storyline_beat (storyline_id, beat_date, text) VALUES (?, ?, ?)');
+    for (const storyline of state.storylines) {
+      insertStoryline.run({
+        id: storyline.id,
+        kind: storyline.kind,
+        title: storyline.title,
+        started: storyline.started,
+        ended: storyline.ended ?? null,
+        status: storyline.status,
+        participants: json(storyline.participants),
+        heat: storyline.heat,
+      });
+      db.prepare('DELETE FROM storyline_beat WHERE storyline_id = ?').run(storyline.id);
+      for (const beat of storyline.beats) insertBeat.run(storyline.id, beat.date, beat.text);
     }
 
     // Append-only tables from here down.
@@ -498,6 +625,104 @@ export function loadUniverse(db: Db): Universe {
     updatedDate: row.updated_date,
   }));
 
+  const venues: Venue[] = (db.prepare('SELECT * FROM venue').all() as Row[]).map((row) => ({
+    id: row.id,
+    name: row.name,
+    city: row.city,
+    country: row.country,
+    capacity: row.capacity,
+    prestige: row.prestige,
+  }));
+
+  const cards: PromotionEvent[] = (db.prepare('SELECT * FROM event_card ORDER BY event_date').all() as Row[]).map((row) => ({
+    id: row.id,
+    promotionId: row.promotion_id,
+    name: row.name,
+    date: row.event_date,
+    venueId: row.venue_id ?? undefined,
+    tier: row.tier,
+    status: row.status,
+    fightIds: [],
+    attendance: row.attendance ?? undefined,
+    ppvBuys: row.ppv_buys ?? undefined,
+    revenue: row.revenue ?? undefined,
+  }));
+
+  const fights: Fight[] = (db.prepare('SELECT * FROM fight ORDER BY bout_order').all() as Row[]).map((row) => ({
+    id: row.id,
+    eventId: row.event_id ?? undefined,
+    divisionKey: row.division_key,
+    fighterAId: row.fighter_a_id,
+    fighterBId: row.fighter_b_id,
+    boutOrder: row.bout_order,
+    billing: row.billing,
+    isTitleFight: row.is_title_fight === 1,
+    titleType: row.title_type ?? undefined,
+    scheduledRounds: row.scheduled_rounds,
+    status: row.status,
+    outcome: row.outcome ?? undefined,
+    winnerId: row.winner_id ?? undefined,
+    finishRound: row.finish_round ?? undefined,
+    finishTime: row.finish_time ?? undefined,
+    technique: row.technique ?? undefined,
+    fightDate: row.fight_date ?? undefined,
+  }));
+
+  for (const card of cards) {
+    card.fightIds = fights.filter((fight) => fight.eventId === card.id).map((fight) => fight.id);
+  }
+
+  const reignsByTitle = new Map<string, TitleRecord['lineage']>();
+  for (const row of db.prepare('SELECT * FROM title_reign ORDER BY from_date').all() as Row[]) {
+    const key = `${row.promotion_id}|${row.division_key}`;
+    const list = reignsByTitle.get(key) ?? [];
+    list.push({ fighterId: row.fighter_id, from: row.from_date, to: row.to_date ?? undefined, defences: row.defences });
+    reignsByTitle.set(key, list);
+  }
+
+  const titles: TitleRecord[] = (db.prepare('SELECT * FROM title').all() as Row[]).map((row) => ({
+    promotionId: row.promotion_id,
+    divisionKey: row.division_key,
+    championId: row.champion_id ?? undefined,
+    interimChampionId: row.interim_champion_id ?? undefined,
+    since: row.since ?? undefined,
+    defences: row.defences,
+    lineage: reignsByTitle.get(`${row.promotion_id}|${row.division_key}`) ?? [],
+  }));
+
+  const news: NewsArticle[] = (
+    db.prepare('SELECT * FROM news_article ORDER BY published DESC, rowid DESC LIMIT 400').all() as Row[]
+  )
+    .map((row) => ({
+      id: row.id,
+      published: row.published,
+      headline: row.headline,
+      body: row.body,
+      category: row.category,
+      subjectId: row.subject_id ?? undefined,
+      storylineId: row.storyline_id ?? undefined,
+    }))
+    .reverse();
+
+  const beatsByStoryline = new Map<string, Storyline['beats']>();
+  for (const row of db.prepare('SELECT * FROM storyline_beat').all() as Row[]) {
+    const list = beatsByStoryline.get(row.storyline_id) ?? [];
+    list.push({ date: row.beat_date, text: row.text });
+    beatsByStoryline.set(row.storyline_id, list);
+  }
+
+  const storylines: Storyline[] = (db.prepare('SELECT * FROM storyline').all() as Row[]).map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    title: row.title,
+    started: row.started,
+    ended: row.ended ?? undefined,
+    status: row.status,
+    participants: parseJson<string[]>(row.participants, []),
+    heat: row.heat,
+    beats: beatsByStoryline.get(row.id) ?? [],
+  }));
+
   const state: UniverseState = {
     seed: meta.seed,
     startDate: meta.start_date,
@@ -508,6 +733,12 @@ export function loadUniverse(db: Db): Universe {
     fighters,
     contracts,
     rankings,
+    titles,
+    venues,
+    cards,
+    fights,
+    news,
+    storylines,
     events: [],
     targetPopulation: meta.target_population,
     idCounters: parseJson<Record<string, number>>(meta.id_counters, {}),

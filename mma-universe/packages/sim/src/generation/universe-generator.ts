@@ -26,6 +26,9 @@ import { Universe, type UniverseState } from '../universe/universe.ts';
 import { buildAllRankings } from '../promotion/rankings.ts';
 import { generateFighter } from './fighter-generator.ts';
 import { generateCamp } from './camp-generator.ts';
+import { generateVenues } from './venue-generator.ts';
+import { createTitle, crownChampion, rankingChampionId } from '../promotion/titles.ts';
+import { isTitleEligible } from '../promotion/matchmaking.ts';
 
 export interface UniverseGenerationConfig {
   readonly seed: string;
@@ -249,6 +252,12 @@ export function generateUniverse(config: UniverseGenerationConfig): Universe {
     fighters: [],
     contracts: [],
     rankings: [],
+    titles: [],
+    venues: [],
+    cards: [],
+    fights: [],
+    news: [],
+    storylines: [],
     events: [],
     targetPopulation: fighterCount,
     idCounters: {},
@@ -350,18 +359,53 @@ export function generateUniverse(config: UniverseGenerationConfig): Universe {
     () => universe.nextId('contract'),
   );
 
-  // --- rankings --------------------------------------------------------------------
-  state.rankings = buildAllRankings(state.promotions, state.fighters, startDate);
+  // --- venues ----------------------------------------------------------------------
+  state.venues = generateVenues(universe.rngFor('genesis', 'venues'), 26, () => universe.nextId('venue'));
 
-  // Champions carry a reign into the world's opening day, so the sport has a history.
-  const championRng = universe.rngFor('genesis', 'champions');
-  for (const entry of state.rankings) {
-    if (entry.rank !== 0) continue;
-    const champion = universe.fighter(entry.fighterId);
-    if (!champion) continue;
-    champion.career.titleReigns = 1;
-    champion.career.titleDefenses = championRng.derive(champion.id).pickWeighted([[0, 0.34], [1, 0.3], [2, 0.2], [3, 0.11], [4, 0.05]]);
+  // --- rankings and titles ----------------------------------------------------------
+  //
+  // Three steps, in this order, because the title records are the authority on who holds a
+  // belt and they do not exist yet: rank provisionally by points, crown the leader of each
+  // division, then rebuild the table with the titles in charge. Skipping the third step
+  // leaves every division with no rank-0 fighter, since a vacant belt no longer back-fills.
+  for (const promotion of state.promotions) {
+    for (const divisionKey of promotion.divisionKeys) {
+      state.titles.push(createTitle(promotion.id, divisionKey));
+    }
   }
+
+  const provisional = buildAllRankings(state.promotions, state.fighters, startDate);
+  const championRng = universe.rngFor('genesis', 'champions');
+
+  for (const promotion of state.promotions) {
+    if (promotion.ranksPerDivision <= 0) continue;
+    for (const divisionKey of promotion.divisionKeys) {
+      const leader = provisional
+        .filter((entry) => entry.promotionId === promotion.id && entry.divisionKey === divisionKey)
+        .sort((a, b) => a.rank - b.rank)[0];
+      if (!leader) continue;
+
+      const champion = universe.fighter(leader.fighterId);
+      const title = universe.title(promotion.id, divisionKey);
+      if (!champion || !title) continue;
+      // The same bar the matchmaker applies. In a thin division on a small circuit the
+      // highest-ranked fighter can have a losing record, and a world should not open with a
+      // champion nobody would have given a title shot.
+      if (!isTitleEligible(champion)) continue;
+
+      // The world opens with champions who already have a reign behind them.
+      champion.career.titleReigns = 1;
+      champion.career.titleDefenses = championRng
+        .derive(champion.id)
+        .pickWeighted([[0, 0.34], [1, 0.3], [2, 0.2], [3, 0.11], [4, 0.05]]);
+      crownChampion(title, champion.id, startDate);
+      title.defences = champion.career.titleDefenses;
+    }
+  }
+
+  state.rankings = buildAllRankings(state.promotions, state.fighters, startDate, provisional, (promotionId, divisionKey) =>
+    rankingChampionId(universe.title(promotionId, divisionKey)),
+  );
 
   // Recruitment tracks the roster that actually exists, including the guaranteed elite and
   // prospect injections, so retirements start being replaced immediately.

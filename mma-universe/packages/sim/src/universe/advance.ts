@@ -21,7 +21,18 @@ import { addDays, daysBetween, exactAgeOn, monthOf, type SimDate } from '../core
 import type { AttributeSet } from '../domain/attributes.ts';
 import { currentAbility, type Fighter } from '../domain/fighter.ts';
 import { campTrainingQuality, type Camp } from '../domain/camp.ts';
-import { buildAllRankings } from '../promotion/rankings.ts';
+import type { FightResult } from '../fight/engine.ts';
+import type { Fight } from '../domain/fight.ts';
+import {
+  bookDueEvents,
+  emptyPromotionReport,
+  holdDueEvents,
+  manageContracts,
+  manageTitles,
+  reconcileRankings,
+  updateWorld,
+  type PromotionTickReport,
+} from './promotion-systems.ts';
 import {
   applyTrainingWeek,
   computeTrainingWeek,
@@ -56,6 +67,13 @@ export interface AdvanceReport {
   campMoves: number;
   campsClosed: number;
   snapshots: DevelopmentSnapshot[];
+  /** Everything the promotion layer did during the advance. */
+  promotion: PromotionTickReport;
+  /**
+   * Every bout fought during the advance, with its full event stream. The caller persists
+   * these; the simulation itself never touches storage.
+   */
+  fightResults: { fight: Fight; result: FightResult }[];
   /** Largest ability movers over the advance, for the CLI and the UI. */
   topRisers: { fighterId: string; delta: number }[];
   topFallers: { fighterId: string; delta: number }[];
@@ -64,6 +82,12 @@ export interface AdvanceReport {
 export interface AdvanceOptions {
   /** How often to capture a development snapshot, in days. 0 disables snapshots. */
   readonly snapshotEveryDays?: number;
+  /**
+   * Whether to return every fight's play-by-play. Defaults to true. A decade-long advance
+   * generates well over a million events, so bulk runs that only care about the outcome can
+   * turn it off.
+   */
+  readonly keepFightEvents?: boolean;
   readonly onDay?: (date: SimDate) => void;
 }
 
@@ -456,6 +480,8 @@ export function advanceUniverse(universe: Universe, days: number, options: Advan
     campMoves: 0,
     campsClosed: 0,
     snapshots: [],
+    promotion: emptyPromotionReport(),
+    fightResults: [],
     topRisers: [],
     topFallers: [],
   };
@@ -473,6 +499,12 @@ export function advanceUniverse(universe: Universe, days: number, options: Advan
 
     runDailySystems(universe, date, report);
 
+    // The promotion layer runs daily: shows are booked when a promotion is due one, and any
+    // card scheduled for today is fought tonight.
+    bookDueEvents(universe, date, report.promotion);
+    const held = holdDueEvents(universe, date, report.promotion, options.keepFightEvents !== false);
+    for (const event of held) report.fightResults.push(...event.results);
+
     const dayIndex = universe.day;
     if (dayIndex % 7 === 0) {
       report.weeksSimulated++;
@@ -486,12 +518,10 @@ export function advanceUniverse(universe: Universe, days: number, options: Advan
       moveFighters(universe, date, monthIndex, report);
       considerRetirements(universe, date, monthIndex, report);
       recruitProspects(universe, date, monthIndex, report);
-      universe.state.rankings = buildAllRankings(
-        universe.state.promotions,
-        universe.state.fighters,
-        date,
-        universe.state.rankings,
-      );
+      manageContracts(universe, date, monthIndex, report.promotion);
+      manageTitles(universe, date, report.promotion);
+      reconcileRankings(universe, date);
+      updateWorld(universe, date, report.promotion);
     }
 
     if (snapshotEvery > 0 && daysSinceSnapshot >= snapshotEvery) {

@@ -41,13 +41,29 @@ const JUDGE_FIRST_NAMES = ['Ana', 'Bruce', 'Carla', 'Derek', 'Elena', 'Frank', '
  * judge, a damage judge — because that variation is what produces disagreement.
  */
 export function generateJudges(rng: Rng): Judge[] {
+  // Names must be distinct: a real panel has three different officials, and downstream a
+  // scorecard is identified by the judge who wrote it.
+  const used = new Set<string>();
+  const uniqueName = (judgeRng: Rng): string => {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const candidate = `${judgeRng.pick(JUDGE_FIRST_NAMES)} ${judgeRng.pick(JUDGE_SURNAMES)}`;
+      if (!used.has(candidate)) {
+        used.add(candidate);
+        return candidate;
+      }
+    }
+    const fallback = `${judgeRng.pick(JUDGE_FIRST_NAMES)} ${judgeRng.pick(JUDGE_SURNAMES)} ${used.size + 1}`;
+    used.add(fallback);
+    return fallback;
+  };
+
   return Array.from({ length: 3 }, (_, index) => {
     const judgeRng = rng.derive('judge', index);
     const strikingLean = judgeRng.float(0.7, 1.35);
     const grapplingLean = judgeRng.float(0.7, 1.35);
     return {
       id: `judge_${index + 1}`,
-      name: `${judgeRng.pick(JUDGE_FIRST_NAMES)} ${judgeRng.pick(JUDGE_SURNAMES)}`,
+      name: uniqueName(judgeRng),
       weights: {
         significantStrikes: 1 * strikingLean,
         damage: judgeRng.float(0.8, 1.5),

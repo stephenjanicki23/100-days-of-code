@@ -92,6 +92,11 @@ export function buildDivisionRankings(
   const eligible = champion
     ? [champion, ...scored.filter((entry) => entry.fighter.id !== championId)]
     : scored;
+  // With no champion the division has a number one contender, not a titleholder, so ranks
+  // start at 1 and the rank-0 slot stays empty. Filling it by points made a vacant division
+  // look occupied — and the matchmaker, reading rank 0 as the champion, then excluded the
+  // division's best fighter from the bout meant to fill the belt.
+  const firstRank = champion ? 0 : 1;
 
   const limit = Math.min(eligible.length, promotion.ranksPerDivision + 1);
   const entries: RankingEntry[] = [];
@@ -101,7 +106,7 @@ export function buildDivisionRankings(
       promotionId: promotion.id,
       divisionKey,
       fighterId: fighter.id,
-      rank: i, // 0 is the champion; 1..N are the ranked contenders.
+      rank: firstRank + i, // 0 is the champion; 1..N are the ranked contenders.
       points: Math.round(points * 10) / 10,
       previousRank: previousRankById.get(fighter.id),
       updatedDate: onDate,
@@ -111,11 +116,19 @@ export function buildDivisionRankings(
 }
 
 /** Rebuilds every division of every promotion that maintains rankings. */
+/**
+ * Rebuilds every division of every promotion that maintains rankings.
+ *
+ * `championFor` is the authority on who holds each belt. It is supplied rather than inferred
+ * so the title records stay the single source of truth — a champion keeps the belt through a
+ * periodic recompute and loses it only in the cage.
+ */
 export function buildAllRankings(
   promotions: readonly Promotion[],
   fighters: readonly Fighter[],
   onDate: SimDate,
   previous: readonly RankingEntry[] = [],
+  championFor?: (promotionId: string, divisionKey: string) => string | undefined,
 ): RankingEntry[] {
   const rankings: RankingEntry[] = [];
   for (const promotion of promotions) {
@@ -126,7 +139,12 @@ export function buildAllRankings(
       );
       // A sitting champion keeps the belt through a periodic recompute; they only lose it in
       // the cage. An active champion who has retired or moved division vacates it.
-      const sitting = previousForDivision.find((entry) => entry.rank === 0)?.fighterId;
+      // Once title records exist they are the only authority: `championFor` returning
+      // undefined means the belt really is vacant, and must not be back-filled from the
+      // previous table. The fallback exists solely for genesis, before any title is created.
+      const sitting = championFor
+        ? championFor(promotion.id, divisionKey)
+        : previousForDivision.find((entry) => entry.rank === 0)?.fighterId;
       const stillActive = fighters.some(
         (f) => f.id === sitting && f.status !== 'retired' && f.divisionKey === divisionKey,
       );
