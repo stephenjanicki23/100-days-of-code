@@ -25,7 +25,21 @@ import {
 import { CLIPS, REACTIONS, applyVariant, isGrounded, resolveClip, restPose } from '../src/three/clips.ts';
 import { CAMERA_PRESETS } from '../src/three/camera.ts';
 import { JOINT_NAMES, JOINT_ORDER, SKELETON, type Joint } from '../src/three/rig.ts';
-import { buildGloves, buildShorts, buildSkin, restOrigin } from '../src/three/body.ts';
+import {
+  BACK,
+  FRONT,
+  LEFT,
+  buildGloves,
+  buildHair,
+  buildShorts,
+  buildSkin,
+  radiusAt,
+  restOrigin,
+  HAIR_STYLES,
+  HEAD_RADII,
+  skullShape,
+} from '../src/three/body.ts';
+import { SKIN_SHADER_MARKER } from '../src/three/skeleton.ts';
 import { angularDelta, resolvePose, sampleClip, type ResolvedPose } from '../src/three/blend.ts';
 import { buildTimeline, sampleFrame } from '../src/three/player.ts';
 import { MAX_JOINT_OFFSET, addLife, fatigueForRound } from '../src/three/life.ts';
@@ -642,5 +656,127 @@ describe('Sprint 20 — the body mesh is well formed', () => {
       SKELETON.hips.offset[1] + SKELETON.hips.length + SKELETON.spine.length,
       6,
     );
+  });
+});
+
+describe('Sprint 20 — muscle, hair and skin', () => {
+  it('bulges a lobe where it is aimed and nowhere else', () => {
+    const bicep = [{ at: FRONT, spread: 0.5, amount: 0.2 }];
+    expect(radiusAt(bicep, FRONT)).toBeCloseTo(1.2, 3);
+    expect(radiusAt(bicep, BACK)).toBeCloseTo(1, 2);
+    expect(radiusAt(bicep, FRONT + 0.5)).toBeGreaterThan(1.05);
+    expect(radiusAt(bicep, FRONT + 0.5)).toBeLessThan(1.2);
+  });
+
+  it('carves a groove for a negative lobe', () => {
+    expect(radiusAt([{ at: BACK, spread: 0.13, amount: -0.055 }], BACK)).toBeLessThan(1);
+  });
+
+  it('wraps around the section rather than falling off a cliff at the seam', () => {
+    // A lobe at the front must read the same approaching from either side of the wrap point.
+    const lobe = [{ at: LEFT, spread: 0.4, amount: 0.15 }];
+    expect(radiusAt(lobe, 0.2)).toBeCloseTo(radiusAt(lobe, Math.PI * 2 - 0.2), 6);
+  });
+
+  it('leaves a plain ellipse alone', () => {
+    expect(radiusAt(undefined, 1.2)).toBe(1);
+    expect(radiusAt([], 1.2)).toBe(1);
+  });
+
+  it('keeps the sculpted body inside human proportions', () => {
+    const skin = buildSkin();
+    let maxX = 0;
+    let maxZ = 0;
+    for (let v = 0; v < skin.positions.length / 3; v++) {
+      maxX = Math.max(maxX, Math.abs(skin.positions[v * 3]!));
+      maxZ = Math.max(maxZ, Math.abs(skin.positions[v * 3 + 2]!));
+    }
+    // Muscle should read, not inflate: a lobe typo shows up here as a balloon.
+    expect(maxX).toBeLessThan(0.42);
+    expect(maxZ).toBeLessThan(0.35);
+  });
+
+  it('puts hair on the head and only on the head', () => {
+    for (const style of [0, 1]) {
+      const hair = buildHair(style);
+      const headIndex = JOINT_ORDER.indexOf('head');
+      for (const index of hair.skinIndices) expect(index).toBe(index === 0 ? index : headIndex);
+      let lowest = Infinity;
+      for (let v = 0; v < hair.positions.length / 3; v++) {
+        lowest = Math.min(lowest, hair.positions[v * 3 + 1]!);
+      }
+      // Above the collarbone, whatever the cut.
+      expect(lowest, `style ${style}`).toBeGreaterThan(1.45);
+    }
+  });
+
+  it('gives the two cuts different silhouettes', () => {
+    const [a, b] = [buildHair(0), buildHair(1)];
+    const visible = (data: { positions: number[] }) => {
+      let count = 0;
+      for (let v = 0; v < data.positions.length / 3; v++) {
+        const y = data.positions[v * 3 + 1]!;
+        const x = data.positions[v * 3]!;
+        const z = data.positions[v * 3 + 2]!;
+        // Vertices proud of the skull are the ones that actually render.
+        if (Math.hypot(x, z - 0.004) > 0.094 || y > 1.82) count++;
+      }
+      return count;
+    };
+    expect(visible(a)).not.toBe(visible(b));
+  });
+
+  it('still emits the shader chunk the skin patch depends on', async () => {
+    // The subsurface term is injected by string replacement. A three.js upgrade renaming the
+    // chunk would silently cost the skin its scattering, and it would read as a tuning
+    // problem for hours; this fails loudly instead.
+    const THREE = await import('three');
+    expect(THREE.ShaderLib.physical.fragmentShader).toContain(SKIN_SHADER_MARKER);
+    expect(THREE.ShaderLib.physical.fragmentShader).toContain('#include <common>');
+  });
+});
+
+describe('Sprint 20 — the hair is a cap, not a shell', () => {
+  /**
+   * Two earlier versions modelled the hair as a full shell tucked inside the skull below the
+   * hairline, and both rendered as a dark mask across the face even though the arithmetic said
+   * the tucked radius was inside the skin everywhere. A cap has no hidden half, so there is
+   * nothing that can surface in the wrong place — these hold it to that shape.
+   */
+  it('generates no geometry below the hairline', () => {
+    for (const style of [0, 1]) {
+      const hair = buildHair(style);
+      let lowest = Infinity;
+      for (let v = 0; v < hair.positions.length / 3; v++) {
+        lowest = Math.min(lowest, hair.positions[v * 3 + 1]!);
+      }
+      // Nothing anywhere near the jaw, let alone the chin.
+      expect(lowest, `style ${style}`).toBeGreaterThan(1.6);
+    }
+  });
+
+  it('sits clear of the skull across the crown', () => {
+    const hair = buildHair(0);
+    const centreY = 1.57 + 0.105;
+    let crownRadius = 0;
+    for (let v = 0; v < hair.positions.length / 3; v++) {
+      const y = hair.positions[v * 3 + 1]!;
+      if (y > centreY + 0.1) crownRadius = Math.max(crownRadius, y - centreY);
+    }
+    // Proud of the bare skull's own crown, or it would simply not be visible.
+    expect(crownRadius).toBeGreaterThan(HEAD_RADII[1]! * skullShape(0, 1, 0));
+  });
+
+  it('gives the two cuts different coverage', () => {
+    expect(HAIR_STYLES[0]!.sweep).not.toBe(HAIR_STYLES[1]!.sweep);
+    const reach = (style: number) => {
+      const hair = buildHair(style);
+      let lowest = Infinity;
+      for (let v = 0; v < hair.positions.length / 3; v++) {
+        lowest = Math.min(lowest, hair.positions[v * 3 + 1]!);
+      }
+      return lowest;
+    };
+    expect(reach(1)).toBeLessThan(reach(0));
   });
 });

@@ -20,17 +20,120 @@ import type { Joint, Vec3 } from './rig.ts';
 import { JOINT_ORDER, SKELETON } from './rig.ts';
 import type { ResolvedPose } from './blend.ts';
 import type { MeshData } from './body.ts';
-import { buildGloves, buildShorts, buildSkin } from './body.ts';
+import {
+  buildBeard,
+  buildFace,
+  buildGloves,
+  buildHair,
+  buildShorts,
+  buildSkin,
+} from './body.ts';
 import { surfaceNoise } from './textures.ts';
 
 export interface FighterPalette {
   readonly skin: number;
   readonly trunks: number;
   readonly gloves: number;
+  readonly hair: number;
+  /** Which cut, indexed into `HAIR_STYLES`. */
+  readonly hairStyle: number;
+  readonly beard: boolean;
+  /** The colour light takes on after passing through flesh; drives the subsurface term. */
+  readonly subsurface: number;
 }
 
-export const PALETTE_A: FighterPalette = { skin: 0xb07a52, trunks: 0xb8323d, gloves: 0xc4323a };
-export const PALETTE_B: FighterPalette = { skin: 0x7d4d30, trunks: 0x2a5fc4, gloves: 0x2f5ed0 };
+export const PALETTE_A: FighterPalette = {
+  skin: 0xb07a52,
+  trunks: 0xb8323d,
+  gloves: 0xc4323a,
+  hair: 0x2b2019,
+  hairStyle: 0,
+  beard: true,
+  subsurface: 0xa8422a,
+};
+
+export const PALETTE_B: FighterPalette = {
+  skin: 0x7d4d30,
+  trunks: 0x2a5fc4,
+  gloves: 0x2f5ed0,
+  hair: 0x191310,
+  hairStyle: 1,
+  beard: false,
+  subsurface: 0x8c3220,
+};
+
+/**
+ * Approximated subsurface scattering.
+ *
+ * Real skin is translucent: light enters, bounces around inside, and leaves reddened —
+ * strongest where the flesh is thin and where the light is behind the subject. Without it a
+ * lit body reads as painted stone, which is the single largest remaining tell after tone
+ * mapping. three.js has no built-in scattering, so this injects the standard cheap
+ * approximation: a forward-scatter term that peaks when the key light is behind the fighter,
+ * modulated by a grazing-angle proxy for thinness, plus a gentle wrap so the terminator is a
+ * gradient rather than a line.
+ *
+ * It is an approximation, not a solution — it does not know actual geometric thickness. At
+ * broadcast distance it carries most of the read; in close-up it would not.
+ */
+const SUBSURFACE_MARKER = '#include <opaque_fragment>';
+
+const SUBSURFACE_GLSL = `
+  {
+    vec3 ssViewDir = normalize( vViewPosition );
+    vec3 ssLightDir = normalize( ( viewMatrix * vec4( uKeyDirection, 0.0 ) ).xyz );
+    float ssBack = pow( clamp( dot( ssViewDir, -ssLightDir ), 0.0, 1.0 ), 3.0 );
+    float ssThin = pow( 1.0 - clamp( dot( normal, ssViewDir ), 0.0, 1.0 ), 2.0 );
+    float ssWrap = clamp( ( dot( normal, ssLightDir ) + 0.35 ) / 1.35, 0.0, 1.0 );
+    outgoingLight += uSubsurface * uSubsurfaceStrength * ( ssBack * ssThin + 0.18 * ssWrap * ssThin );
+  }
+  ${SUBSURFACE_MARKER}`;
+
+/** Direction the key light travels from, matching `scene.ts`. Kept in one place on purpose. */
+const KEY_DIRECTION = new THREE.Vector3(2.6, 10.5, 3.4).normalize();
+
+function skinMaterial(palette: FighterPalette, noise: THREE.Texture): THREE.MeshPhysicalMaterial {
+  const material = new THREE.MeshPhysicalMaterial({
+    color: palette.skin,
+    roughness: 0.74,
+    metalness: 0,
+    // Clearcoat stands in for sweat under the lights, which is much of what separates a
+    // person on camera from a mannequin.
+    clearcoat: 0.1,
+    clearcoatRoughness: 0.62,
+    clearcoatRoughnessMap: noise,
+    sheen: 0.22,
+    sheenColor: new THREE.Color(0xffd9c2),
+    sheenRoughness: 0.8,
+    roughnessMap: noise,
+    bumpMap: noise,
+    bumpScale: 0.0032,
+  });
+
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uSubsurface = { value: new THREE.Color(palette.subsurface) };
+    shader.uniforms.uSubsurfaceStrength = { value: 0.62 };
+    shader.uniforms.uKeyDirection = { value: KEY_DIRECTION };
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      `#include <common>
+      uniform vec3 uSubsurface;
+      uniform float uSubsurfaceStrength;
+      uniform vec3 uKeyDirection;`,
+    );
+    if (!shader.fragmentShader.includes(SUBSURFACE_MARKER)) {
+      // A silently failed string replace would cost the skin its scattering and look like a
+      // tuning problem for hours. `animation.test.ts` guards the marker; this guards the run.
+      throw new Error(`skin shader: three.js no longer emits ${SUBSURFACE_MARKER}`);
+    }
+    shader.fragmentShader = shader.fragmentShader.replace(SUBSURFACE_MARKER, SUBSURFACE_GLSL);
+  };
+
+  return material;
+}
+
+/** Exported so a test can assert three still emits the chunk the skin shader patches. */
+export const SKIN_SHADER_MARKER = SUBSURFACE_MARKER;
 
 function toGeometry(data: MeshData): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
@@ -70,22 +173,7 @@ export class FighterModel {
     const skeleton = new THREE.Skeleton(ordered);
 
     const noise = surfaceNoise();
-
-    // Skin: a dielectric with a faint sheen. The clearcoat stands in for sweat under the
-    // lights, which is most of what separates a person from a mannequin on camera.
-    const skin = new THREE.MeshPhysicalMaterial({
-      color: palette.skin,
-      roughness: 0.62,
-      metalness: 0,
-      clearcoat: 0.22,
-      clearcoatRoughness: 0.45,
-      sheen: 0.35,
-      sheenColor: new THREE.Color(0xffd9c2),
-      sheenRoughness: 0.7,
-      roughnessMap: noise,
-      bumpMap: noise,
-      bumpScale: 0.0025,
-    });
+    const skin = skinMaterial(palette, noise);
     const trunks = new THREE.MeshStandardMaterial({
       color: palette.trunks,
       roughness: 0.9,
@@ -100,17 +188,31 @@ export class FighterModel {
       clearcoatRoughness: 0.35,
       roughnessMap: noise,
     });
-    this.materials.push(skin, trunks, gloves);
+    // Hair is dark, rough and reads almost entirely as silhouette at this distance, so it
+    // wants no specular to speak of; the eyes want the opposite.
+    const hair = new THREE.MeshStandardMaterial({
+      color: palette.hair,
+      roughness: 0.82,
+      metalness: 0,
+      roughnessMap: noise,
+    });
+    const eyes = new THREE.MeshStandardMaterial({ color: 0x140f0c, roughness: 0.28, metalness: 0 });
+    this.materials.push(skin, trunks, gloves, hair, eyes);
 
-    for (const [data, material] of [
-      [buildSkin(), skin],
-      [buildShorts(), trunks],
-      [buildGloves(), gloves],
-    ] as const) {
+    const parts: [ReturnType<typeof buildSkin>, THREE.Material, boolean][] = [
+      [buildSkin(), skin, true],
+      [buildShorts(), trunks, true],
+      [buildGloves(), gloves, true],
+      [buildHair(palette.hairStyle), hair, false],
+      [buildFace(), eyes, false],
+    ];
+    if (palette.beard) parts.push([buildBeard(), hair, false]);
+
+    for (const [data, material, casts] of parts) {
       const geometry = toGeometry(data);
       this.geometries.push(geometry);
       const mesh = new THREE.SkinnedMesh(geometry, material);
-      mesh.castShadow = true;
+      mesh.castShadow = casts;
       mesh.receiveShadow = true;
       // Skinned bounds go stale as the pose changes; culling on them drops limbs mid-punch.
       mesh.frustumCulled = false;
