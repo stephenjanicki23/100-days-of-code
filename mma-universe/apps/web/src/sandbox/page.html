@@ -363,12 +363,13 @@
         <table>
           <thead>
             <tr>
-              <th></th><th>Fighter</th><th>Division</th><th>Record</th><th>Age</th><th>CA</th><th>Corner</th>
+              <th></th><th>Fighter</th><th>Division</th><th>Record</th><th>Age</th><th title="Current ability, rated inside the fighter's own division">CA</th><th>Corner</th>
             </tr>
           </thead>
           <tbody id="roster"></tbody>
         </table>
       </div>
+      <p class="rlegend">CA is ability <em>within</em> a division. A 160 flyweight and a 160 heavyweight are equally good for their own size &mdash; they are not equal fighters, and across divisions the engine scales power, chin and grappling by the weight gap.</p>
     </section>
 
     <section>
@@ -377,7 +378,7 @@
         <div class="corner red" id="corner-0"></div>
         <div class="corner blue" id="corner-1"></div>
       </div>
-      <p class="warn" id="mismatch" hidden>These two are in different divisions. The engine will run it anyway — a useful thing to test, and not a fight a commission would sanction.</p>
+      <p class="warn" id="mismatch" hidden>These two are in different divisions. The engine will run it anyway, scaled for the weight gap — a useful thing to test, and not a fight a commission would sanction.</p>
       <div class="bout">
         <label for="rounds">Rounds</label>
         <select id="rounds"><option value="3">3</option><option value="5">5</option></select>
