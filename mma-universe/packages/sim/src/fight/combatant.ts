@@ -20,6 +20,7 @@ import { createDamageState, damagePenalties, type DamageState } from './damage.t
 import { createStamina, effectiveOutput, type Stamina } from './stamina.ts';
 import { planFromTendencies, type GamePlan } from './plan.ts';
 import type { StrikeTechnique } from './events.ts';
+import { fightingWeight } from './size.ts';
 
 export interface Combatant {
   readonly id: string;
@@ -55,6 +56,8 @@ export interface Combatant {
 
   /** Which weight class this fight is at; the engine reads its pacing profile from it. */
   readonly divisionKey: string;
+  /** Contracted fighting weight in pounds — see `size.ts` for why the engine needs it. */
+  readonly weightLbs: number;
   /**
    * Fight-elapsed second at which this fighter may act again.
    *
@@ -156,6 +159,7 @@ export function createCombatant(fighter: Fighter, plan?: GamePlan): Combatant {
     knockdowns: 0,
     finished: false,
     divisionKey: fighter.divisionKey,
+    weightLbs: fightingWeight(fighter),
     readyAt: 0,
     vulnerableUntil: 0,
     comboLeft: 0,

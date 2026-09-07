@@ -20,6 +20,7 @@ import { applyStrikeDamage, damageDescription, needsDoctor, recoverDamageBetween
 import { effectiveOutput, recover, recoverBetweenRounds, spend } from './stamina.ts';
 import { adaptInFight, buildGamePlan, cornerInstructions } from './tactics.ts';
 import { classProfile, type ClassProfile } from './pacing.ts';
+import { burdenRatio, grapplingEdge, knockdownRatio, powerRatio, strikingEdge } from './size.ts';
 import {
   CLINCH_STRIKES,
   GROUND_STRIKES,
@@ -389,7 +390,7 @@ export function simulateFight(
     definition: StrikeDefinition,
     range: Range,
   ): number {
-    const offence = effective(actor, 'strikingOffense');
+    const offence = effective(actor, 'strikingOffense') + strikingEdge(actor.weightLbs, opponent.weightLbs);
     // Swelling and cuts close an eye. Facial damage is tracked separately from concussive
     // load precisely so it can do this rather than only feed the knockout check.
     const vision = 1 - clamp(opponent.damage.face / 240 + opponent.damage.cuts * 0.045, 0, 0.3);
@@ -412,7 +413,13 @@ export function simulateFight(
     const stats = currentRound(actor);
     stats.totalStrikesAttempted++;
     if (definition.significant) stats.significantStrikesAttempted++;
-    spend(actor.stamina, definition.cost * (0.7 + actor.plan.pace * 0.6) * classProfile(actor.divisionKey).drain);
+    spend(
+      actor.stamina,
+      definition.cost *
+        (0.7 + actor.plan.pace * 0.6) *
+        classProfile(actor.divisionKey).drain *
+        burdenRatio(actor.weightLbs, opponent.weightLbs),
+    );
 
     const chance = landChanceForStrike(actor, opponent, definition, range);
     const roll = r.next();
@@ -451,6 +458,7 @@ export function simulateFight(
       definition.power *
         0.22 *
         classProfile(actor.divisionKey).power *
+        powerRatio(actor.weightLbs, opponent.weightLbs) *
         remap(powerRating, 1, 100, 0.55, 1.5) *
         remap(durability, 1, 100, 1.35, 0.62) *
         (clean ? 1 : 0.45) *
@@ -528,7 +536,14 @@ export function simulateFight(
     const accumulated = 1 + opponent.damage.concussive / 55;
     const tired = remap(effectiveOutput(opponent.stamina), 0.35, 1, 1.7, 1);
     const chance = clamp(
-      0.0085 * profile.knockdown * definition.concussive * (damage / 1.6) * chin * accumulated * tired,
+      0.0085 *
+        profile.knockdown *
+        knockdownRatio(actor.weightLbs, opponent.weightLbs) *
+        definition.concussive *
+        (damage / 1.6) *
+        chin *
+        accumulated *
+        tired,
       0,
       0.45,
     );
@@ -668,9 +683,9 @@ export function simulateFight(
       description: `${actor.shortName} shoots for ${article(definition.label)}.`,
     });
 
-    const offence = effective(actor, 'wrestlingOffense');
+    const offence = effective(actor, 'wrestlingOffense') + grapplingEdge(actor.weightLbs, opponent.weightLbs);
     const defence = effective(opponent, 'wrestlingDefense');
-    const chance = clamp(contest(offence, defence) * definition.ease * 0.82, 0.05, 0.82);
+    const chance = clamp(contest(offence, defence) * definition.ease * 0.82, 0.02, 0.9);
 
     if (r.bool(chance)) {
       stats.takedownsLanded++;
@@ -707,7 +722,10 @@ export function simulateFight(
 
   function resolveClinchEntry(actor: Combatant, opponent: Combatant, r: Rng): void {
     spend(actor.stamina, 0.9);
-    const chance = contest(effective(actor, 'clinch'), effective(opponent, 'wrestlingDefense') * 0.8);
+    const chance = contest(
+      effective(actor, 'clinch') + grapplingEdge(actor.weightLbs, opponent.weightLbs),
+      effective(opponent, 'wrestlingDefense') * 0.8,
+    );
     if (r.bool(chance)) {
       state.position = r.bool(0.6) ? 'CAGE_CLINCH' : 'CLINCH';
       state.topId = actor.id;
@@ -763,7 +781,7 @@ export function simulateFight(
     stats.submissionAttempts++;
     spend(actor.stamina, definition.cost);
 
-    const offence = effective(actor, 'groundOffense');
+    const offence = effective(actor, 'groundOffense') + grapplingEdge(actor.weightLbs, opponent.weightLbs);
     const defence = effective(opponent, 'groundDefense');
     const tightness = clamp(contest(offence, defence) * definition.ease * r.float(0.7, 1.3), 0.05, 0.98);
 
