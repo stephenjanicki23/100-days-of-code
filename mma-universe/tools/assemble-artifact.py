@@ -71,7 +71,10 @@ def main() -> None:
             f'<figcaption>{caption}</figcaption></figure>'
         )
 
-    head = (SCRATCH / 'art' / 'head.html').read_text()
+    # The page markup is version-controlled; only the rendered media is scratch. It lived in
+    # the scratchpad until now, which meant the whole Cageside Replay template would have been
+    # lost with the session.
+    head = pathlib.Path('/home/user/100-days-of-code/mma-universe/apps/web/src/artifact/page.html').read_text()
     head = head.replace('{{VIDEO}}', data_uri(film, 'video/webm'))
     head = head.replace('{{POSTER}}', data_uri(poster, 'image/jpeg'))
     head = head.replace('{{PLATES}}', ''.join(plates))

@@ -1,0 +1,536 @@
+<title>Cageside Replay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  /*
+    A single committed palette. The render window is an unconditionally dark arena, so the
+    chrome commits to the same world rather than inverting around a black viewport — and every
+    colour is painted explicitly so the page holds on whatever ground the host paints behind it.
+  */
+  :root {
+    --ground: #0c0e13;
+    --surface: #14181f;
+    --raised: #1b202a;
+    --rule: #262d3a;
+    --rule-soft: #1d2330;
+    --ink: #e7eaf0;
+    --ink-dim: #8b95a7;
+    --ink-faint: #5b6577;
+    --gold: #e0b64a;
+    --gold-soft: #6a5320;
+    --red: #d23b46;
+    --blue: #3b6ee2;
+    --ui: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --page: 1180px;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: var(--page);
+    margin: 0 auto;
+    padding: 40px 24px 72px;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+  }
+
+  a { color: var(--gold); }
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  /* ------------------------------------------------------------------ masthead */
+
+  .masthead { display: flex; flex-direction: column; gap: 10px; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(30px, 4.4vw, 46px);
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    margin: 0;
+    max-width: 66ch;
+    color: var(--ink-dim);
+    font-size: 16px;
+  }
+  .standfirst strong { color: var(--ink); font-weight: 600; }
+
+  /* --------------------------------------------------------------------- tabs */
+
+  /* ---------------------------------------------------------------- offline film */
+
+  .dbg {
+    position: absolute;
+    top: 52px;
+    left: 16px;
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 2px 12px;
+    padding: 10px 12px;
+    background: #000000b8;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 11px;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .dbg-k { color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.08em; }
+  .dbg-v { color: var(--ink); }
+
+  .toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-dim);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .toggle input { accent-color: var(--gold); }
+
+  .offline { display: flex; flex-direction: column; gap: 12px; }
+
+  .film {
+    width: 100%;
+    display: block;
+    background: #05070b;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+  }
+
+  .offline-note { margin: 0; max-width: 78ch; color: var(--ink-dim); font-size: 14px; }
+  .offline-note em { color: var(--ink); font-style: normal; }
+
+  .plates { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  @media (max-width: 760px) { .plates { grid-template-columns: 1fr; } }
+  .plates figure { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .plates img { width: 100%; display: block; border: 1px solid var(--rule-soft); border-radius: 3px; }
+  .plates figcaption { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .tabs button {
+    flex: 1 1 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: flex-start;
+    text-align: left;
+    padding: 11px 14px;
+    background: var(--surface);
+    color: var(--ink-dim);
+    border: 1px solid var(--rule-soft);
+    border-bottom: 2px solid transparent;
+    border-radius: 3px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .tabs button:hover { border-color: var(--rule); color: var(--ink); }
+  .tabs button.on { background: var(--raised); color: var(--ink); border-bottom-color: var(--gold); }
+  .tab-kind { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+  .tabs button.on .tab-kind { color: var(--gold); }
+  .tab-who { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+  .tabs button.on .tab-who { color: var(--ink-dim); }
+
+  /* -------------------------------------------------------------------- stage */
+
+  .stage {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    background: #080a0f;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .stage canvas { display: block; width: 100%; height: 100%; }
+
+  .stage-fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+    padding: 40px;
+    color: var(--ink-dim);
+  }
+  .stage-fallback .mono { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+
+  .hud {
+    position: absolute;
+    left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 18px;
+    pointer-events: none;
+  }
+  .hud-top { top: 0; background: linear-gradient(#000000b0, #0000); }
+  .hud-bottom { bottom: 0; background: linear-gradient(#0000, #000000bb); }
+
+  .corner { flex: 1; display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 15px; }
+  .corner.right { justify-content: flex-end; }
+  .dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+
+  .hud-clock {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: 0.02em;
+    color: var(--gold);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cam {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 3px 7px;
+    white-space: nowrap;
+    flex: none;
+  }
+  .hud-line { font-size: 15px; color: #f1f4f9; }
+
+  /* ---------------------------------------------------------------- transport */
+
+  .transport {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    border-radius: 3px;
+    flex-wrap: wrap;
+  }
+  .transport button {
+    font: inherit;
+    padding: 7px 13px;
+    background: var(--raised);
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .transport button:hover { border-color: var(--gold-soft); }
+  .transport button.play { min-width: 82px; font-weight: 600; background: var(--gold); color: #171204; border-color: var(--gold); }
+  .transport button.play:hover { filter: brightness(1.08); }
+  .transport .readout {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .transport input[type='range'] {
+    flex: 1 1 220px;
+    min-width: 140px;
+    accent-color: var(--gold);
+    background: transparent;
+  }
+  .transport select {
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 8px;
+    background: var(--raised);
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+  }
+  .hint { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
+
+  /* ----------------------------------------------------------------- columns */
+
+  .split { display: grid; grid-template-columns: minmax(280px, 350px) 1fr; gap: 22px; align-items: start; }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 10px;
+  }
+
+  .verdict {
+    padding: 12px 14px;
+    background: var(--surface);
+    border-left: 2px solid var(--gold);
+    font-size: 14px;
+    color: var(--ink-dim);
+  }
+  .verdict strong { color: var(--ink); }
+
+  .tape { display: flex; flex-direction: column; margin-top: 14px; }
+  .tape-head { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; padding-bottom: 10px; }
+  .tape-name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+  .tape-name.right { justify-content: flex-end; text-align: right; }
+  .tape-div {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    white-space: nowrap;
+  }
+  .tape-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 10px;
+    padding: 9px 0;
+    border-top: 1px solid var(--rule-soft);
+    font-family: var(--mono);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tape-a { text-align: left; }
+  .tape-b { text-align: right; }
+  .tape-k {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    align-self: center;
+  }
+
+  /* ----------------------------------------------------------- directive feed */
+
+  .stream {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    height: 470px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    border-radius: 3px;
+  }
+  .stream li {
+    display: grid;
+    grid-template-columns: 158px 96px 78px 1fr;
+    gap: 12px;
+    align-items: baseline;
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--rule-soft);
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .stream li:hover { background: var(--raised); }
+  .stream li.live { background: var(--raised); border-left-color: var(--gold); }
+  .col-clip { color: var(--ink); }
+  .stream li.live .col-clip { color: var(--gold); }
+  .col-cam, .col-rx { color: var(--ink-dim); }
+  .col-rx.dim { color: var(--ink-faint); }
+  .col-line { font-family: var(--ui); font-size: 13px; color: var(--ink-dim); }
+  .stream li.live .col-line { color: var(--ink); }
+  @media (max-width: 700px) {
+    .stream li { grid-template-columns: 1fr 1fr; }
+    .col-line { grid-column: 1 / -1; }
+  }
+
+  /* -------------------------------------------------------------------- notes */
+
+  .notes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0; border-top: 1px solid var(--rule); }
+  @media (max-width: 800px) { .notes { grid-template-columns: 1fr; } }
+  .note { padding: 18px 22px 4px 0; display: flex; flex-direction: column; gap: 6px; }
+  .note { padding: 18px 22px; }
+  .note:nth-child(even) { border-left: 1px solid var(--rule-soft); }
+  .note:nth-child(n + 3) { border-top: 1px solid var(--rule-soft); }
+  @media (max-width: 800px) { .note { border-left: 0 !important; } .note + .note { border-top: 1px solid var(--rule-soft); } }
+  .note h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
+  .note p { margin: 0; font-size: 13.5px; color: var(--ink-dim); }
+  .note code { font-family: var(--mono); font-size: 12px; color: var(--gold); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <span class="eyebrow">MMA Universe · Sprint 20</span>
+    <h1>Cageside Replay</h1>
+    <p class="standfirst">
+      Four fights the simulation actually produced, drawn two ways — once in a path tracer and once live in the
+      browser. Both renderers are fed the
+      <strong>directive stream on the right and nothing else</strong> — one row per event, each naming a prebuilt
+      clip, a camera hint and the reaction on the receiving fighter. It has no access to the fight engine, no
+      attributes, no ability scores. If it can draw a fight from this, so can a game engine.
+    </p>
+  </header>
+
+  <section class="offline">
+    <p class="panel-title">Path-traced offline — the same fight, a slower lens</p>
+    <video class="film" controls loop muted playsinline preload="metadata" poster="{{POSTER}}">
+      <source src="{{VIDEO}}" type="video/webm">
+      Your browser cannot play this clip.
+    </video>
+    <p class="offline-note">
+      Rendered frame by frame in a path tracer, driven by the very same directive stream the live viewer below
+      reads. Nothing about the fight changed — only the renderer on the other end. This buys what no integrated
+      GPU can do in real time: light that actually scatters <em>through</em> skin, shadows with soft edges because
+      the lights have size, and bounce from the canvas filling the shadow side of a body. It took twenty-nine
+      minutes of CPU to make and costs your laptop nothing to watch.
+    </p>
+    <div class="plates">{{PLATES}}</div>
+
+    <p class="panel-title" style="margin-top:8px">Before and after — the animation layer, rewritten</p>
+    <video class="film" controls loop muted playsinline preload="metadata">
+      <source src="{{COMPARE}}" type="video/webm">
+    </video>
+    <p class="offline-note">
+      The same fight, the same three and a half seconds, the same seed — only the choreography changed. On the left a
+      clip returns a pose: all nineteen joints, so a fighter throwing a punch <em>cannot</em> also be stepping, and the
+      body snaps between discrete states. On the right a clip claims only the parts of the body it needs and the rest
+      is left to the stance underneath; the feet stay planted until the leg can no longer reach and then step; the pair
+      circle instead of facing along a fixed axis; and the fighters carry their own habits — one presses forward on
+      heavier legs, the other moves and resets more.
+    </p>
+    <p class="offline-note">
+      The right-hand side also registers being hit, which the left never did. Reactions were selected by damage
+      thresholds of 3 and 8 against a scale where a landed strike carries about 0.4 to 2.5 — so every clean strike
+      mapped to <em>no reaction at all</em>, and the impact camera never fired once in a whole fight. Nothing errored;
+      there was only an absence.
+    </p>
+  </section>
+
+  <p class="panel-title" style="margin-top:6px">Real time — scrub the whole fight</p>
+  <div class="tabs" id="tabs" role="tablist" aria-label="Fights"></div>
+
+  <div class="stage" id="stage">
+    <div class="hud hud-top">
+      <span class="corner"><span class="dot" style="background:#d23b46"></span><span id="hud-a">&nbsp;</span></span>
+      <span class="hud-clock" id="hud-clock">R1 · 05:00</span>
+      <span class="corner right"><span id="hud-b">&nbsp;</span><span class="dot" style="background:#3b6ee2"></span></span>
+    </div>
+    <div class="dbg" id="debug" hidden></div>
+    <div class="hud hud-bottom">
+      <span class="cam" id="hud-cam">broadcast</span>
+      <span class="hud-line" id="hud-line">&nbsp;</span>
+    </div>
+  </div>
+
+  <div class="transport">
+    <button id="btn-prev" title="Previous action (left arrow)" aria-label="Previous action">‹‹</button>
+    <button class="play" id="btn-play" aria-pressed="false">Play</button>
+    <button id="btn-next" title="Next action (right arrow)" aria-label="Next action">››</button>
+    <span class="readout"><span id="time">00:00</span> / <span id="dur">00:00</span></span>
+    <input id="scrub" type="range" min="0" max="100" step="0.01" value="0" aria-label="Scrub through the fight">
+    <select id="rate" aria-label="Playback speed">
+      <option value="0.25">0.25×</option>
+      <option value="0.5">0.5×</option>
+      <option value="1" selected>1×</option>
+      <option value="2">2×</option>
+      <option value="4">4×</option>
+    </select>
+    <select id="pacing" aria-label="Pacing">
+      <option value="CONDENSED" selected>Action only</option>
+      <option value="REALTIME">Fight clock</option>
+    </select>
+    <label class="toggle"><input type="checkbox" id="debug-toggle"> debug</label>
+    <span class="hint">space · ← →</span>
+  </div>
+
+  <div class="split">
+    <section>
+      <p class="panel-title">The result</p>
+      <div class="verdict" id="verdict"></div>
+      <div class="tape" id="tape"></div>
+    </section>
+
+    <section>
+      <p class="panel-title">Directive stream — the renderer's only input</p>
+      <ul class="stream" id="stream"></ul>
+    </section>
+  </div>
+
+  <div class="notes">
+    <div class="note">
+      <h3>Nothing here is scripted</h3>
+      <p>
+        The fights were simulated by the engine from the seed <code>showcase-2026</code>. Same seed, same fights,
+        forever — including which judge scored which round the other way.
+      </p>
+    </div>
+    <div class="note">
+      <h3>Events describe, they never direct</h3>
+      <p>
+        The engine emits what happened; a static registry resolves it into a clip and a camera hint. No camera
+        angle or timing curve ever enters the event contract, which is what lets one stream feed text, statistics
+        and this.
+      </p>
+    </div>
+    <div class="note">
+      <h3>Two renderers, one contract</h3>
+      <p>
+        The path tracer and the browser share no code — different language, different renderer, different machine.
+        They agree because they read the same directives. An engine client would be a third.
+      </p>
+    </div>
+    <div class="note">
+      <h3>The cage is a contest</h3>
+      <p>
+        Position used to be a sine curve around the centre mark. Now the man with more forward pressure walks the
+        other onto the fence, and the one who lives at range works an angle off it. Watch
+        <em>Styles make fights</em>: a brawler puts a karate fighter's back to the mesh for half the fight.
+      </p>
+    </div>
+    <div class="note">
+      <h3>Ten decisions a second</h3>
+      <p>
+        The engine used to resolve <em>exchanges</em>: one fighter acted, the other waited, and a
+        fifteen-minute fight held about eighty decisions. It now ticks at 0.1s with each fighter on
+        an independent clock, so the two drift against each other and a man can be caught
+        mid-combination. These four fights carry <code>886</code>, <code>737</code>,
+        <code>1797</code> and <code>634</code> events — three to four times what they held before.
+      </p>
+    </div>
+    <div class="note">
+      <h3>Weight class is a real input</h3>
+      <p>
+        It was not one. Measured over two hundred fights, flyweights and heavyweights both threw
+        6.9 significant strikes a minute and finished at the same rate. Now every pacing number is
+        keyed by class: flyweights throw 12.3 a minute and win 70% by decision, heavyweights throw
+        7.6 and finish 71% inside the distance.
+      </p>
+    </div>
+    <div class="note">
+      <h3>A trait that was never there</h3>
+      <p>
+        Every movement trait came through one normalisation written for a 0–200 attribute scale the generator
+        never produced. Against the real 1–98 range it clamped the median fighter to zero: most of the roster
+        never circled, never tired, never feinted. Like the reaction thresholds before it, nothing errored —
+        there was only an absence.
+      </p>
+    </div>
+  </div>
+</div>
